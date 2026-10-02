@@ -1,4 +1,4 @@
-// Voice-chip core: an ES5506 ("OTTO")-derived chip with 48 voices and one flat page of 32 longword
+// Voice-chip core: an ES5506-derived chip with 48 voices and one flat page of 32 longword
 // registers per voice (page select 0x7C). Written for this project; MAME's es5506 device (BSD-3-Clause,
 // Aaron Giles) is the behavioural reference for interpolation, the 4-pole filter, loop handling and IRQs.
 // Differences from the ES5506 that the OS image shows (HARDWARE_MAP.md, VOICE_CORE_REPORT.md):

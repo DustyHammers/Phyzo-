@@ -27,6 +27,7 @@
 #include <vector>
 #include "machine.h"
 #include "os_image.h"
+#include "rom_id.h"
 
 namespace {
 struct Event { double t; std::string cmd; std::vector<std::string> args; };
@@ -84,12 +85,13 @@ std::vector<uint8_t> hexBytes(const std::vector<std::string>& a, size_t from) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string osPath, wavePath, script, out = "play_out", expect = "P 01";
+    std::string osPath, wavePath, romsDir, script, out = "play_out", expect = "P 01";
     int stateLimitBits = 0; bool esp2Stub = false, ram16 = false, profileRun = false, esp2Ref = false, esp2Checkpoint = false, esp2Alias = false, traceEsp2 = false; std::string audioInPath; int ips = 192; double bootMs = 8000, settleMs = 1000, stepMs = 10; bool trace = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { if (i + 1 >= argc) { std::exit(2); } return argv[++i]; };
         if (a == "--os") osPath = next(); else if (a == "--wave") wavePath = next(); else if (a == "--script") script = next();
+        else if (a == "--roms") romsDir = next();
         else if (a == "--out") out = next(); else if (a == "--expect") expect = next(); else if (a == "--step-ms") stepMs = std::atof(next().c_str());
         else if (a == "--settle-ms") settleMs = std::atof(next().c_str()); else if (a == "--trace") trace = true;
         else if (a == "--state-limit") stateLimitBits = std::atoi(next().c_str());
@@ -104,8 +106,14 @@ int main(int argc, char** argv) {
         else if (a == "--audio-in") audioInPath = next();
         else { std::fprintf(stderr, "unknown option %s\n", a.c_str()); return 2; }
     }
+    if (!romsDir.empty()) {   // find the ROMs by checksum; an explicit --os/--wave wins
+        romid::ScanResult rs = romid::scanFolder(romsDir);
+        if (osPath.empty()) osPath = rs.osPath;
+        if (wavePath.empty()) wavePath = rs.wavePath;
+        if (osPath.empty() || wavePath.empty()) { std::fprintf(stderr, "%s\n", rs.problem().c_str()); return 2; }
+    }
     if (osPath.empty() || wavePath.empty() || script.empty()) {
-        std::puts("usage: phyzo_play --os <image> --wave <native wave image> --script <file> [--out dir] [--trace] [--step-ms 10]"); return 2;
+        std::puts("usage: phyzo_play (--os <image> --wave <native wave image> | --roms <folder>) --script <file> [--out dir] [--trace] [--step-ms 10]"); return 2;
     }
     mkdir(out.c_str(), 0755);
     std::vector<Event> ev;
@@ -116,6 +124,8 @@ int main(int argc, char** argv) {
 
     OsImage os; std::string err;
     if (!os.load(osPath, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 2; }
+    if (os.md5 != romid::kOsImageMd5)
+        std::fprintf(stderr, "warning: OS image MD5 %s is not the supported version (%s)\n", os.md5.c_str(), romid::kOsImageMd5);
     Machine m; Machine::Config cfg; cfg.esp2Stub = esp2Stub; cfg.esp2InstrPerSample = ips;
     if (!m.init(os, cfg, err) || !m.loadWaveMemory(wavePath, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 2; }
     if (trace) m.setTraceDir(out);

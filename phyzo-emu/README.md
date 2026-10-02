@@ -44,7 +44,14 @@ Targets: `phyzo_boot` (fast core, used for speed figures), `phyzo_boot_trace`
 
 ```sh
 ./build/phyzo_boot_trace --os /path/to/os_image.bin --out boot_out
+./build/phyzo_boot_trace --roms /path/to/roms --out boot_out
 ```
+
+`--roms <folder>` finds the OS image and the native wave image in a folder by MD5 checksum, whatever the file
+names (`src/rom_id.*`; supported versions: OS image `8de06f48bfb0d847cacab05b763e22c5`, native wave image
+`42a974e31e48b05815d07554d0063171`). If one is missing, the message names it and the folder. An explicit `--os`
+or `--wave` wins over the folder; an OS image with another checksum gets a warning, since the addresses in
+`src/os_profile.h` belong to the supported version.
 
 Options: `--expect "P 01"`, `--boot-ms`, `--settle-ms`, `--idle-ms`,
 `--no-buttons`, `--no-notes`, `--no-mailbox-rule`, `--answer-f4 <0..1023>`,
@@ -69,7 +76,8 @@ Outputs in `--out`:
 images). Keep them out of this repository.** `.gitignore` excludes the usual output
 locations.
 
-`ctest` runs the boot test when configured with `-DOS_IMAGE=/path/to/image`.
+`ctest` runs the tests that need no ROM data (`rom_id`: MD5 and ROM identification), plus the boot test when
+configured with `-DOS_IMAGE=/path/to/image`.
 
 ## Voice-chip core (src/voice_core.*)
 
@@ -89,6 +97,7 @@ Register 0x48, 0x58-0x68, 0x74 and CR bit 10 changes are logged to `resonance_re
 ## phyzo_play: script-driven renders
 
     build/phyzo_play --os <OS image> --wave <native image> --script <file> --out <dir> [--trace]
+    build/phyzo_play --roms <folder> --script <file> --out <dir> [--trace]
 
 Boots to "P 01", settles 1 s, then runs the script in 10 ms real-time steps. Script lines:
 `<ms> midi <hex...>`, `<ms> panel <hex...>`, `<ms> poke8|poke16|poke32 <addr> <value>`,

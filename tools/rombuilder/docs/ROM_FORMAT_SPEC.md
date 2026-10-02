@@ -2,7 +2,8 @@
 
 Status: v1.3 (adds header field rom_patch), used by wave ROM v0.3.1 (2026-10-01). v1.2 (zone flag LOW_CONFIDENCE) was used by ROM v0.3. v1.1 (sweep type 4) was used by ROM v0.2, v1.0 by ROM v0.1; older files stay valid. Container designed for the Phyzo recreation's
 `WaveStore`. The container and this document hold no wave data; every ROM file is built from user-supplied
-inputs by `tools/rombuilder` and loaded by the plugin from `~/Library/Application Support/<CODENAME>/`.
+inputs by `tools/rombuilder`. The plugin does not read the container itself: it loads the native wave image built
+from it (NATIVE_IMAGE.md) from `~/Documents/Phyzo/roms/`.
 
 ## 1. General rules
 
@@ -112,7 +113,7 @@ The source rate is folded into `zone_pitch` by the builder:
 ## 6. Playback semantics by type
 
 **Loop types**
-- `ONE_SHOT` (0): play from `play_start` to `pcm_length`, then stop; pitch-tracked by the same law as every zone (FIZDRUMS).
+- `ONE_SHOT` (0): play from `play_start` to `pcm_length`, then stop; pitch-tracked by the same law as every zone (e.g. the drum-kit wave).
 - `FORWARD` (1): play forward; on reaching `loop_end` jump back by `loop_end - loop_start`. For sweepable zones
   the loop window is replaced by the current frame window (below).
 - `BIDIRECTIONAL` (2): as forward, but reflect at both window edges; the period is twice the window length.
@@ -121,7 +122,7 @@ The source rate is folded into `zone_pitch` by the builder:
 
 **Start Index position** (OS routine 0x1AC28), 8.8 fixed point:
 `p = StartIndex × 256 + (modValue × modAmount) / 128 + (offset − 64) × 256`, clamped to 0 … 0x7FFF (0–127.99).
-`offset` is a byte centred at 64 (most likely the I knob, Derived); the scale of `modValue` is still Open. `index = p >> 8`.
+`offset` is a byte centred at 64 (most likely perf2, the transwave-position knob, Derived); the scale of `modValue` is still Open. `index = p >> 8`.
 
 **Sweep types**
 - `NONE` (0): window = `[loop_start, loop_end)`.

@@ -1,0 +1,25 @@
+# Build output and fetched dependencies (never committed)
+build/
+build-*/
+work/
+cmake-build-*/
+
+# Tool output folders (trace files quote values produced by the OS)
+boot_out/
+play_out/
+renders/
+report/
+
+# ROM files, recordings and other data: never committed (CI rejects them too)
+*.bin
+*.img
+*.wav
+*.mid
+*.syx
+*.mp3
+roms/
+
+# OS and editor files
+.DS_Store
+.vscode/
+.idea/
