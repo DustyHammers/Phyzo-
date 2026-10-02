@@ -28,7 +28,9 @@ bool unpackBlob(const std::vector<uint8_t>& data, Blob& b) {
 }
 }  // namespace
 
-Engine::Engine() = default;
+Engine::Engine() {
+    for (int i = 0; i < 26; ++i) { controls_[size_t(i)] = PanelModel::kFreshControls[size_t(i)]; positions_[size_t(i)] = controls_[size_t(i)]; }
+}
 
 Engine::~Engine() {
     stopJob();
@@ -71,11 +73,25 @@ void Engine::setState(const std::vector<uint8_t>& blob) {
     startJob(std::move(b.machine));
 }
 
-void Engine::pressButton(int osButton, bool down) {
+void Engine::push(uint32_t entry) {
     const uint32_t head = btnHead_.load(std::memory_order_relaxed);
     if (head - btnTail_.load(std::memory_order_acquire) >= uint32_t(kButtonRing)) return;   // full: drop
-    buttons_[head % kButtonRing].store(uint16_t((osButton << 1) | (down ? 1 : 0)), std::memory_order_relaxed);
+    buttons_[head % kButtonRing].store(entry, std::memory_order_relaxed);
     btnHead_.store(head + 1, std::memory_order_release);
+}
+
+void Engine::pressButton(int osButton, bool down) { push(uint32_t((osButton << 1) | (down ? 1 : 0))); }
+
+void Engine::setControl(int cc, int raw) {
+    if (cc < 0 || cc >= 26) return;
+    raw = std::clamp(raw, 0, 1023);
+    { std::lock_guard<std::mutex> lk(controlsMtx_); controls_[size_t(cc)] = uint16_t(raw); }
+    positions_[size_t(cc)] = uint16_t(raw);
+    push((1u << 24) | (uint32_t(cc) << 10) | uint32_t(raw));
+}
+
+void Engine::publishPositions(const Machine& m) {
+    for (int i = 0; i < 26; ++i) positions_[size_t(i)] = m.panel.controls[size_t(i)];
 }
 
 void Engine::service() {
@@ -118,6 +134,7 @@ void Engine::runJob(std::string osPath, std::string wavePath, std::vector<uint8_
         Machine::Config cfg;
         if (!m->init(os, cfg, err) || !m->loadWaveMemory(wavePath, err)) return false;
         m->panel.keepLog = false;
+        { std::lock_guard<std::mutex> lk(controlsMtx_); m->panel.controls = controls_; }   // answered to the OS's F4
         m->captureAudio = true;
         m->audio.reserve(1 << 16); m->wet.reserve(1 << 16);
         return true;
@@ -168,6 +185,8 @@ void Engine::install(std::unique_ptr<Machine> m, uint64_t generation, uint8_t ra
         if (generation != generation_.load()) return;           // a newer job replaced this one
         live_.swap(m);
         rawPlus_ = rawPlus; rawMinus_ = rawMinus;
+        publishPositions(*live_);
+        { std::lock_guard<std::mutex> lc(controlsMtx_); controls_ = live_->panel.controls; }   // a restored state's knobs
         retime_ = true;
         state_ = State::Running;
     }
@@ -199,8 +218,14 @@ void Engine::drainButtons(Machine& m) {
     uint32_t tail = btnTail_.load(std::memory_order_relaxed);
     const uint32_t head = btnHead_.load(std::memory_order_acquire);
     for (; tail != head; ++tail) {
-        const uint16_t v = buttons_[tail % kButtonRing].load(std::memory_order_relaxed);
-        const uint8_t raw = (v >> 1) == 1 ? rawPlus_ : rawMinus_;
+        const uint32_t v = buttons_[tail % kButtonRing].load(std::memory_order_relaxed);
+        if ((v >> 24) == 1) {
+            const int cc = int((v >> 10) & 0x1F);
+            m.panel.moveControl(cc, int(v & 0x3FF), m.cycles());
+            if (cc < 26) positions_[size_t(cc)] = m.panel.controls[size_t(cc)];
+            continue;
+        }
+        const uint8_t raw = ((v >> 1) & 0xFF) == 1 ? rawPlus_ : rawMinus_;
         m.panel.inject({uint8_t((v & 1) ? 0x81 : 0x80), raw}, m.cycles(), std::string());
     }
     btnTail_.store(tail, std::memory_order_release);

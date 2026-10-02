@@ -50,3 +50,6 @@ owner step by step through anything they must do by hand on github.com or on the
   (`resampler.*`). `plugin/` wraps it (JUCE) and scans `~/Documents/Phyzo/roms/`. Musashi has one global CPU:
   machines take turns under a lock (`Machine::becomeCpuOwner`). Project state = complete machine state
   (`Machine::saveState`), tied to the ROM checksums.
+- Panel analog controls (26, `Bx cc vv`, raw 0-1023): `phyzo-emu/docs/PANEL_CONTROLS.md`. Their positions are the
+  panel's physical state (`PanelModel::controls`, saved with the machine), never host parameters. The pitch wheel
+  must be answered at 512 to the OS's F4 request.

@@ -22,7 +22,7 @@ they are not copied content.
 | 68340 DMA ch1 | Copies BTC bytes per start (byte/byte, SAPI/DAPI), leaves SAR advanced |
 | ESP2 | emulated (src/esp2_core.*): runs the microcode the OS loads; see "ESP2 core" below. The boot-milestone placeholder remains as `--esp2-stub` |
 | Voice chip | emulated (src/voice_core.*): 48 voices, loop-end IRQ on level 5, wave memory from `--wave`; see "Voice-chip core" below |
-| Front panel | Serial channel A model: answers the hello, decodes display and LED messages |
+| Front panel | Serial channel A model: answers the hello and the F4 request (all 26 analog control positions, `docs/PANEL_CONTROLS.md`), decodes display and LED messages |
 | Everything else | Reads 0, writes ignored, logged |
 
 Boot-ROM services are host traps: reboot (vector slot 1), OS update (slot 254),
@@ -54,8 +54,10 @@ or `--wave` wins over the folder; an OS image with another checksum gets a warni
 `src/os_profile.h` belong to the supported version.
 
 Options: `--expect "P 01"`, `--boot-ms`, `--settle-ms`, `--idle-ms`,
-`--no-buttons`, `--no-notes`, `--no-mailbox-rule`, `--answer-f4 <0..1023>`,
-`--f2-reply <hex>`, `--cpu-hz`.
+`--no-buttons`, `--no-notes`, `--no-mailbox-rule`, `--answer-f4 <0..1023>` (one value for all controls),
+`--no-answer-f4` (leave F4 unanswered, the behaviour before F-02), `--f2-reply <hex>`, `--cpu-hz`.
+By default the panel answers F4 with the fresh-instance positions of `docs/PANEL_CONTROLS.md`. The summary reports
+ESP2 register 0x0F9 after boot. `phyzo_play` accepts `--no-answer-f4` too.
 
 The run boots until the display shows the expected text, settles for one second,
 runs the button tests, plays one panel key and one MIDI note, then runs idle for

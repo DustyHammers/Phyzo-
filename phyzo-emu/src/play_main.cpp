@@ -86,6 +86,7 @@ std::vector<uint8_t> hexBytes(const std::vector<std::string>& a, size_t from) {
 
 int main(int argc, char** argv) {
     std::string osPath, wavePath, romsDir, script, out = "play_out", expect = "P 01";
+    bool noAnswerF4 = false;
     int stateLimitBits = 0; bool esp2Stub = false, ram16 = false, profileRun = false, esp2Ref = false, esp2Checkpoint = false, esp2Alias = false, traceEsp2 = false; std::string audioInPath; int ips = 192; double bootMs = 8000, settleMs = 1000, stepMs = 10; bool trace = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -96,6 +97,7 @@ int main(int argc, char** argv) {
         else if (a == "--settle-ms") settleMs = std::atof(next().c_str()); else if (a == "--trace") trace = true;
         else if (a == "--state-limit") stateLimitBits = std::atoi(next().c_str());
         else if (a == "--esp2-stub") esp2Stub = true;
+        else if (a == "--no-answer-f4") noAnswerF4 = true;
         else if (a == "--profile") profileRun = true;
         else if (a == "--esp2-ref") esp2Ref = true;
         else if (a == "--esp2-checkpoint") esp2Checkpoint = true;
@@ -129,6 +131,7 @@ int main(int argc, char** argv) {
     Machine m; Machine::Config cfg; cfg.esp2Stub = esp2Stub; cfg.esp2InstrPerSample = ips;
     if (!m.init(os, cfg, err) || !m.loadWaveMemory(wavePath, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 2; }
     if (trace) m.setTraceDir(out);
+    m.panel.answerF4 = !noAnswerF4;
     m.esp2.ram16 = ram16; m.esp2.ramAlias = esp2Alias;
     if (traceEsp2 && !trace) { m.esp2.log = std::fopen((out + "/esp2_commands.csv").c_str(), "w"); if (m.esp2.log) std::fprintf(m.esp2.log, "t_ms,source,op,addr,value\n"); }
     m.esp2.extLog = std::fopen((out + "/esp2_external_writes.csv").c_str(), "w");
@@ -144,6 +147,7 @@ int main(int argc, char** argv) {
     if (m.runUntil(m.cyclesFromMs(bootMs), seen) != Machine::Stop::Predicate) { both("boot FAILED, display \"%s\"\n", m.panel.text().c_str()); return 1; }
     m.runUntil(m.cycles() + m.cyclesFromMs(settleMs));
     both("boot: \"%s\" at %.1f ms (+%.0f ms settle)\n", m.panel.text().c_str(), m.ms(m.cycles()) - settleMs, settleMs);
+    if (!esp2Stub) both("esp2_reg_0F9: 0x%06X\n", m.esp2.reg(0x0F9));
 
     const uint64_t t0 = m.cycles();
     std::string recName; size_t recStart = 0; double recHost = 0, recEmu = 0, totalHost = 0, totalEmu = 0; uint64_t l5Start = m.irqTaken[5];

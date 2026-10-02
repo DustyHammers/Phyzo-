@@ -32,8 +32,13 @@ public:
     void setRoms(const std::string& osPath, const std::string& wavePath, const std::string& osMd5, const std::string& waveMd5);
     std::vector<uint8_t> getState();                 // engine state blob (empty if there is nothing to save)
     void setState(const std::vector<uint8_t>& blob); // restores now, or as soon as the ROMs are known
-    // Front-panel button press/release by OS button id (0 = -/No, 1 = +/Yes); lock-free, any thread.
+    // Front-panel button press/release by OS button id (0 = -/No, 1 = +/Yes); lock-free, message thread.
     void pressButton(int osButton, bool down);
+    // An analog panel control moved (docs/PANEL_CONTROLS.md): cc 0-25, raw 0-1023. Lock-free, message thread.
+    // The running machine receives one Bx cc vv; the position is kept (saved with the machine state) and is what
+    // the panel answers to the OS's F4 request when a machine boots.
+    void setControl(int cc, int raw);
+    int controlPosition(int cc) const { return cc >= 0 && cc < 26 ? positions_[size_t(cc)].load() : 0; }
 
     // Call regularly on the message thread: restarts the machine after the OS asked for a reboot.
     void service();
@@ -68,6 +73,8 @@ private:
     void setMessage(const std::string& s);
     void fail(const std::string& reason);
     void drainButtons(Machine& m);
+    void publishPositions(const Machine& m);
+    void push(uint32_t entry);
 
     // ROMs (message thread)
     std::string osPath_, wavePath_, osMd5_, waveMd5_;
@@ -103,6 +110,9 @@ private:
 
     // panel buttons: single-producer ring (UI) -> audio thread
     static constexpr int kButtonRing = 64;
-    std::array<std::atomic<uint16_t>, kButtonRing> buttons_{};
+    std::array<std::atomic<uint32_t>, kButtonRing> buttons_{};   // (kind << 24) | payload
+    std::array<std::atomic<uint16_t>, 26> positions_{};          // current control positions (for the UI)
+    std::mutex controlsMtx_;
+    std::array<uint16_t, 26> controls_{};                          // positions for the next cold boot
     std::atomic<uint32_t> btnHead_{0}, btnTail_{0};
 };
