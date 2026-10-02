@@ -86,6 +86,15 @@ int main() {
         CHECK(k.get(0, 0x00) & STOP0);
         CHECK(k.c.voiceStops == 1);
     }
+    {   // START = END (table-sweep frame chaining): the voice keeps running and is not stopped
+        Chip k; k.c.setBank(2, mem); k.voices(1);
+        k.basic(0, 6000, 6000, 2048, BYPASS | LPE);
+        int sounding = 0;
+        for (int i = 0; i < 100; ++i) { int32_t l, r; k.c.tick(l, r); if (l) ++sounding; }
+        CHECK(sounding > 0);
+        CHECK(!(k.get(0, 0x00) & (STOP0 | STOP1)));
+        CHECK(k.c.voiceStops == 0);
+    }
     {   // loop-end IRQ on voice 3, acknowledged by reading IRQV
         Chip k; k.c.setBank(2, mem); k.voices(4);
         for (int v = 0; v < 4; ++v) k.basic(v, 100, 200, 2048, BYPASS | STOP1);   // stopped

@@ -246,7 +246,6 @@ void VoiceCore::tick(int32_t &left, int32_t &right) {
     int n = std::min<int>(kVoices, int(actv & 0x3F) + 1);
     for (int i = 0; i < n; ++i) {
         Voice &vc = v[i];
-        if (vc.start == vc.end) vc.cr |= STOP0;
         if (!(vc.cr & STOPMASK)) {
             int32_t s = 0;
             if (processAudio) {

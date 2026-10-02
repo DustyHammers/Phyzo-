@@ -91,7 +91,8 @@ bits 28-29 of START/END/ACCUM.
 
 Modelled: ES5506 linear interpolation (11-bit fraction), FC with 11 fraction bits, END fraction (4 bits,
 0x34) and ACCUM fraction (11 bits, 0x3C), forward/bidirectional loops, BLE+LEI one-shot latches, loop-end IRQ
-on level 5 (IRQV read acknowledges), STOP0 at the end of one-shots, CR bit 19 as a start strobe, signed 8.8
+on level 5 (IRQV read acknowledges), STOP0 at the end of one-shots (a voice with START = END keeps running: the OS's table-sweep frame chaining
+writes START = END and expects that), CR bit 19 as a start strobe, signed 8.8
 volume and K1/K2 ramps with the slow bit (bit 0: applied every 8th sample), ECOUNT, the four non-resonant
 4-pole filter modes, the ES5506 log volume law, live read-back of every register, and the filter field in CR bits 8-10 (see below).
 Register 0x48, 0x58-0x68, 0x74 and CR bit 10 changes are logged to `resonance_register_writes.csv`. Output is the dry stereo sum, unclamped; 2^19 is the full scale of the chip's 20-bit output.
