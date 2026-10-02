@@ -18,7 +18,7 @@ endif()
 set(GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${GENERATED_DIR}")
 
-# Same opcode-table bounds patch as the EPS-16+ project (portable table walk).
+# Opcode-table bounds patch (portable table walk); see THIRD_PARTY_NOTICES.md.
 set(MUSASHI_INPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/musashi-input")
 set(MUSASHI_INPUT "${MUSASHI_INPUT_DIR}/m68k_in.c")
 file(MAKE_DIRECTORY "${MUSASHI_INPUT_DIR}")
@@ -68,6 +68,7 @@ set(HARNESS_SOURCES
   src/voice_core.cpp
   src/panel_model.cpp
   src/os_image.cpp
+  src/rom_id.cpp
   src/musashi_glue.cpp
   src/boot_test.cpp)
 
@@ -99,7 +100,7 @@ endif()
 
 # Script-driven player: boots the OS with the voice-chip core and renders WAV (fast core).
 add_executable(phyzo_play src/machine.cpp src/mc68340.cpp src/esp2_stub.cpp src/esp2_core.cpp src/voice_core.cpp src/panel_model.cpp
-  src/os_image.cpp src/musashi_glue.cpp src/play_main.cpp)
+  src/os_image.cpp src/rom_id.cpp src/musashi_glue.cpp src/play_main.cpp)
 target_include_directories(phyzo_play PRIVATE src)
 target_link_libraries(phyzo_play PRIVATE musashi_fast)
 target_compile_options(phyzo_play PRIVATE -Wall -Wextra)
@@ -113,3 +114,9 @@ target_compile_options(filter_test PRIVATE -Wall -Wextra)
 add_executable(esp2_test tools/esp2_test.cpp src/esp2_core.cpp src/os_image.cpp)
 target_include_directories(esp2_test PRIVATE src)
 target_compile_options(esp2_test PRIVATE -Wall -Wextra)
+
+# Tests that need no ROM data (run by CI).
+add_executable(rom_id_test tests/rom_id_test.cpp src/rom_id.cpp src/os_image.cpp)
+target_include_directories(rom_id_test PRIVATE src)
+target_compile_options(rom_id_test PRIVATE -Wall -Wextra)
+add_test(NAME rom_id COMMAND rom_id_test)

@@ -10,6 +10,7 @@
 #include "machine.h"
 #include "os_image.h"
 #include "os_profile.h"
+#include "rom_id.h"
 
 extern "C" {
 #include "m68k.h"
@@ -18,7 +19,7 @@ extern "C" {
 namespace {
 
 struct Options {
-    std::string os, out = "boot_out", expect = "P 01", wave;
+    std::string os, out = "boot_out", expect = "P 01", wave, roms;
     double bootMs = 8000, settleMs = 1000, idleMs = 5000;
     bool buttons = true, mailboxRule = true, notes = true, esp2Stub = false, esp2Checkpoint = false;
     int answerF4 = -1, f2Reply = -1;
@@ -26,7 +27,7 @@ struct Options {
 };
 
 void usage() {
-    std::puts("usage: phyzo_boot --os <image> [--out dir] [--expect \"P 01\"] [--boot-ms N] [--settle-ms N]\n"
+    std::puts("usage: phyzo_boot (--os <image> | --roms <folder>) [--out dir] [--expect \"P 01\"] [--boot-ms N] [--settle-ms N]\n"
               "               [--idle-ms N] [--no-buttons] [--no-notes] [--esp2-stub] [--no-mailbox-rule] [--answer-f4 V] [--f2-reply XX]\n"
               "               [--cpu-hz HZ] [--wave native_wave_image.bin]");
 }
@@ -52,6 +53,7 @@ int main(int argc, char** argv) {
         auto next = [&]() -> std::string { if (i + 1 >= argc) { usage(); std::exit(2); } return argv[++i]; };
         if (a == "--os") o.os = next();
         else if (a == "--wave") o.wave = next();
+        else if (a == "--roms") o.roms = next();
         else if (a == "--out") o.out = next();
         else if (a == "--expect") o.expect = next();
         else if (a == "--boot-ms") o.bootMs = std::atof(next().c_str());
@@ -67,12 +69,20 @@ int main(int argc, char** argv) {
         else if (a == "--cpu-hz") o.cpuHz = std::atof(next().c_str());
         else { usage(); return 2; }
     }
+    if (!o.roms.empty()) {   // find the ROMs by checksum; an explicit --os/--wave wins
+        romid::ScanResult rs = romid::scanFolder(o.roms);
+        if (o.os.empty() && !rs.hasOs()) { std::fprintf(stderr, "%s\n", rs.problem().c_str()); return 2; }
+        if (o.os.empty()) o.os = rs.osPath;
+        if (o.wave.empty()) o.wave = rs.wavePath;
+    }
     if (o.os.empty()) { usage(); return 2; }
     mkdir(o.out.c_str(), 0755);
 
     OsImage os;
     std::string err;
     if (!os.load(o.os, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 2; }
+    if (os.md5 != romid::kOsImageMd5)
+        std::fprintf(stderr, "warning: OS image MD5 %s is not the supported version (%s)\n", os.md5.c_str(), romid::kOsImageMd5);
 
     Machine m;
     Machine::Config cfg;

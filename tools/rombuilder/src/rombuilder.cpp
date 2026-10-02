@@ -128,6 +128,7 @@ int main(int argc, char **argv) {
                 if (z.lowKey != s->low || z.highKey != s->high) z.flags |= ZONE_KEY_OVERRIDE;
                 z.sourceKind = SRC_EPS_IMG; z.playStart = (uint32_t)s->playStart; z.loopStart = (uint32_t)s->loopStart; z.loopEnd = (uint32_t)s->loopEnd;
                 z.frameSize = z.loopEnd - z.loopStart; z.frameCount = (uint32_t)s->frames; z.srcRoot = (int16_t)s->root; z.srcTune = (int16_t)s->tune;
+                // loop-mode tokens exactly as the input listing spells them (input data, not our naming)
                 if (s->mode == "TranswaveForward") { z.loopType = LOOP_FORWARD; z.sweepType = SWEEP_TABLE; }
                 else if (s->mode == "TranswaveBidirectional") { z.loopType = LOOP_BIDIRECTIONAL; z.sweepType = SWEEP_TABLE; }
                 else if (s->mode == "LoopStartX") { z.loopType = LOOP_FORWARD; z.sweepType = SWEEP_LOOPSTARTX; z.frameCount = 1; }

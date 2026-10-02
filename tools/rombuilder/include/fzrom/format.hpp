@@ -30,12 +30,12 @@ inline double increment(int32_t zonePitch, int note, double extraUnits = 0.0) {
 
 // ---- Start Index position (OS routine 0x1AC28), 8.8 fixed point:
 // p = StartIndex*256 + (modValue*modAmount)/128 + (offset-64)*256, clamped to 0 .. 127.99 (0x7FFF).
-// offset is the centred-at-64 byte (most likely the I knob). Integer division truncates toward zero.
+// offset is the centred-at-64 byte (most likely perf2, the table-sweep position knob). Integer division truncates toward zero.
 inline int32_t indexPosition(int startIndex, int modValue, int modAmount, int offset) {
     int32_t p = startIndex * 256 + (modValue * modAmount) / 128 + (offset - 64) * 256;
     return p < 0 ? 0 : p > 0x7FFF ? 0x7FFF : p;
 }
-// ---- Table sweep (native loop mode 6/7 and EXP-3 transwaves): frame = index * N / 128 (integer), index = p >> 8
+// ---- Table sweep (native loop mode 6/7 and EXP-3 table-sweep waves): frame = index * N / 128 (integer), index = p >> 8
 inline uint32_t tableFrame(uint32_t index, uint32_t frameCount) { return index * frameCount / 128u; }
 
 // ---- Stretch sweep (native loop mode 5): shift s = index * smax(key) / 128 (integer);

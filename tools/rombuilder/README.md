@@ -16,7 +16,7 @@ source, every manifest wave resolvable by preset ID, every populated wave coveri
 overlaps. Any failure aborts with a non-zero exit code.
 
     rombuilder --manifest phyzo_wave_manifest.csv --sources rom_sources.csv --data-root DATA \
-               --exp3-text "EXP3 Transwaves.txt" --out phyzo_wave_rom.bin --report-dir report \
+               --exp3-text exp3_listing.txt --out phyzo_wave_rom.bin --report-dir report \
                [--rom-version 0.1] [--build-date 2026-10-01T12:00:00Z]
 
 Given the same inputs and `--build-date`, output is byte-identical.
@@ -38,7 +38,7 @@ latched to the next loop-end wrap, never mid-cycle; `sweep_switches.csv` logs wh
 
 `--descending 1` renders the sweeps from index 127 down to 0, the order of the hardware recordings. The Start Index
 position follows OS routine 0x1AC28 (`--mod-value`, `--mod-amount`, `--offset` feed it). `--keyseq` renders one note per
-key (0.4 s on, 0.1 s off) for the waves in `--waves`, matching the DeepSonic single-wave recordings. `--notes` mixes a note list
+key (0.4 s on, 0.1 s off) for the waves in `--waves`, matching the private single-wave recordings. `--notes` mixes a note list
 (`time_s,key,duration_s,semitones`; one-shots play to their end, `semitones` is the oscillator Semitone Tune) for one wave.
 
 `regress/regress.py` — measures the renders: pitch by harmonic comb vs targets (±3 c), and step similarity of

@@ -1,4 +1,4 @@
-// Reader for single-instrument EPS-16 PLUS disk images (800 KB) as produced by the wave-set builds.
+// Reader for single-instrument EPS .img disk images (800 KB) as produced by the wave-set builds.
 // Layout facts used here (our own analysis of the build disks; no manufacturer data):
 //  - directory in blocks 3-4, 26-byte entries, type 3 = instrument, start block at +18 (BE32)
 //  - FAT from block 5, 3-byte BE entries, 170 per block, 0/1 = end of chain
