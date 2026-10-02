@@ -37,13 +37,24 @@ macOS marks everything downloaded from the internet as "quarantined" and refuses
 notarised by Apple. Phyzo is ad-hoc signed, not notarised, so the mark must be removed:
 
 1. Open **Terminal** (Applications > Utilities > Terminal).
-2. Paste this line and press Return (it prints nothing when it works):
+2. Type the following, **ending with a space**, and do not press Return yet:
 
-       xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/Phyzo.vst3 ~/Library/Audio/Plug-Ins/Components/Phyzo.component
+       sudo xattr -r -d com.apple.quarantine 
 
-3. Paste this line and press Return, so macOS re-reads its Audio Unit list ("No matching processes" is fine):
+3. Drag **Phyzo.vst3** from Finder onto the Terminal window. Terminal adds its exact location, whichever Library
+   folder it is in. Press Return and type your Mac password if asked (nothing shows while you type).
+   No message means it worked.
+4. Repeat steps 2 and 3 for **Phyzo.component** if you installed the AU.
+5. For the AU only: paste this line and press Return, so macOS re-reads its Audio Unit list
+   ("No matching processes" is fine):
 
        killall -9 AudioComponentRegistrar
+
+If Terminal prints "Not enough arguments for option -d", the space before the file location is missing.
+If it prints "No such file", the path is wrong: drag the plugin onto Terminal instead of typing it.
+
+Plugins work from either `~/Library/Audio/Plug-Ins/...` (your user folder) or `/Library/Audio/Plug-Ins/...` (all
+users); Finder's Go to Folder can land in either.
 
 Repeat step 4 every time you install a new build.
 
@@ -59,5 +70,5 @@ If REAPER reports that the plugin failed to load, repeat step 4 and restart REAP
 
 ## Uninstalling
 
-Quit REAPER and move `~/Library/Audio/Plug-Ins/VST3/Phyzo.vst3` and
-`~/Library/Audio/Plug-Ins/Components/Phyzo.component` to the Bin.
+Quit REAPER and move `Phyzo.vst3` and `Phyzo.component` (in `~/Library/Audio/Plug-Ins/...` or
+`/Library/Audio/Plug-Ins/...`) to the Bin.
