@@ -1,0 +1,124 @@
+# CI: data-file guard, ROM-free tests on Linux, and the macOS plugin build (VST3 + AU, ad-hoc signed).
+# No job uses ROM files, and none may ever need them.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  data-check:
+    name: No ROMs or data files
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0            # every commit is checked, not only the final tree
+      - name: Check every commit for data files
+        run: python3 scripts/check_no_data.py HEAD
+
+  linux-tests:
+    name: Linux tests (no ROM data)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Restore dependency cache
+        uses: actions/cache@v6
+        with:
+          path: work/deps
+          key: deps-linux-musashi-${{ hashFiles('scripts/deps.env') }}
+      - name: Fetch Musashi (pinned)
+        run: scripts/fetch_deps.sh musashi
+      - name: Build emulator
+        run: |
+          cmake -S phyzo-emu -B build/emu -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/emu
+      - name: Emulator tests
+        run: ctest --test-dir build/emu --output-on-failure
+      - name: Build rombuilder
+        run: |
+          cmake -S tools/rombuilder -B build/rombuilder -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/rombuilder
+      - name: Rombuilder tests
+        run: ctest --test-dir build/rombuilder --output-on-failure
+
+  macos-plugin:
+    name: macOS plugin (VST3 + AU, Apple Silicon)
+    runs-on: macos-15
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install build tools
+        run: brew install ninja ccache
+      - name: Restore dependency cache
+        uses: actions/cache@v6
+        with:
+          path: work/deps
+          key: deps-macos-${{ hashFiles('scripts/deps.env') }}
+      - name: Restore compiler cache
+        uses: actions/cache@v6
+        with:
+          path: .ccache
+          key: ccache-macos-${{ hashFiles('scripts/deps.env') }}-${{ github.sha }}
+          restore-keys: ccache-macos-${{ hashFiles('scripts/deps.env') }}-
+      - name: Fetch Musashi and JUCE (pinned)
+        run: scripts/fetch_deps.sh
+      - name: Emulator tests on macOS
+        run: |
+          cmake -S phyzo-emu -B build/emu -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build/emu
+          ctest --test-dir build/emu --output-on-failure
+      - name: Build plugin
+        run: |
+          cmake -S plugin -B build/plugin -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build/plugin
+          ccache --show-stats
+      - name: Ad-hoc sign
+        run: |
+          cd build/plugin/Phyzo_artefacts/Release
+          for b in VST3/Phyzo.vst3 AU/Phyzo.component; do
+            codesign --force --deep --sign - --timestamp=none "$b"
+            codesign --verify --deep --strict --verbose=2 "$b"
+          done
+      - name: Check plugin identity (must never change)
+        run: python3 scripts/check_plugin_identity.py build/plugin/Phyzo_artefacts/Release --mac
+      - name: Validate the Audio Unit (auval)
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R build/plugin/Phyzo_artefacts/Release/AU/Phyzo.component ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          auval -a | grep -i phyz || true
+          auval -v aumu Phyz DHmr
+      - name: Package
+        id: package
+        run: |
+          version=$(sed -n 's/^project(Phyzo VERSION \([0-9.]*\).*/\1/p' plugin/CMakeLists.txt)
+          name="Phyzo-${version}-macOS-$(git rev-parse --short HEAD)"
+          mkdir -p "dist/$name"
+          ditto build/plugin/Phyzo_artefacts/Release/VST3/Phyzo.vst3 "dist/$name/Phyzo.vst3"
+          ditto build/plugin/Phyzo_artefacts/Release/AU/Phyzo.component "dist/$name/Phyzo.component"
+          cp plugin/packaging/INSTALL.txt "dist/$name/INSTALL.txt"
+          (cd dist && ditto -c -k --keepParent "$name" "$name.zip")
+          echo "zip=dist/$name.zip" >> "$GITHUB_OUTPUT"
+      - name: Upload plugin
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.package.outputs.zip }}
+          archive: false
+          retention-days: 30
+          if-no-files-found: error

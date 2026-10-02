@@ -27,10 +27,21 @@ owner step by step through anything they must do by hand on github.com or on the
   (System Controller 4). Visible labels come from the skin.
 - Keep the MIDI/SysEx identity (manufacturer code, model number, message formats) exactly as the OS uses it.
 - Plugin identity, fixed forever (hosts use it to find the plugin in saved projects): manufacturer "DHammers",
-  manufacturer code "DHmr", plugin name "Phyzo", plugin code "Phyz", bundle ID com.dhammers.phyzo.
+  manufacturer code "DHmr", plugin name "Phyzo", plugin code "Phyz", bundle ID com.dhammers.phyzo, plus
+  `JUCE_VST3_CAN_REPLACE_VST2=0`. Resulting VST3 class ID `ABCDEF019182FAEB44486D725068797A`, AU `aumu Phyz DHmr`.
+  CI checks all of these (`scripts/check_plugin_identity.py`).
 
 ## Other constraints
 
 - No CI job may ever need the ROM files.
 - Do not copy Gearmulator code (GPL-3); using its design as a reference is fine.
 - Speed work must keep the emulator's output byte-identical to the current version.
+
+## Build and CI
+
+- Dependencies are pinned in `scripts/deps.env` and fetched by `scripts/fetch_deps.sh` into `work/deps/` (ignored).
+- `.github/workflows/ci.yml`: data-file guard over every commit (`scripts/check_no_data.py`), ROM-free tests on
+  Linux (`ctest` in `phyzo-emu` and `tools/rombuilder`), and the macOS plugin build with identity check, auval and
+  the downloadable zip. The ESP2 and voice-core tests hold golden hashes of the current output: a speed change
+  that alters them has changed the sound.
+- Owner's install guide: `docs/INSTALL_MAC.md`.
