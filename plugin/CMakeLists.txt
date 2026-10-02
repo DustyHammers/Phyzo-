@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
-project(Phyzo VERSION 0.2.0 LANGUAGES C CXX)
+project(Phyzo VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,6 +15,9 @@ if(NOT EXISTS "${JUCE_DIR}/CMakeLists.txt")
   message(FATAL_ERROR "JUCE not found in ${JUCE_DIR}. Run scripts/fetch_deps.sh juce, or set -DJUCE_DIR=...")
 endif()
 add_subdirectory("${JUCE_DIR}" "${CMAKE_BINARY_DIR}/JUCE" EXCLUDE_FROM_ALL)
+
+# The emulator (phyzo_core), from the same repository.
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../phyzo-emu" "${CMAKE_BINARY_DIR}/phyzo-emu" EXCLUDE_FROM_ALL)
 
 # AU exists only on macOS; other systems build the VST3 alone (used to compile-check the code on Linux).
 if(APPLE)
@@ -43,7 +46,8 @@ juce_add_plugin(Phyzo
   COPY_PLUGIN_AFTER_BUILD FALSE)
 
 target_sources(Phyzo PRIVATE
-  Source/PluginProcessor.cpp)
+  Source/PluginProcessor.cpp
+  Source/PluginEditor.cpp)
 
 target_compile_definitions(Phyzo PUBLIC
   JUCE_VST3_CAN_REPLACE_VST2=0      # part of the identity: there was never a VST2 version (fixes the VST3 class ID)
@@ -52,6 +56,7 @@ target_compile_definitions(Phyzo PUBLIC
 
 target_link_libraries(Phyzo
   PRIVATE
+    phyzo_core
     juce::juce_audio_processors
   PUBLIC
     juce::juce_recommended_config_flags

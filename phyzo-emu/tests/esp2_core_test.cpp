@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include "esp2_core.h"
+#include "state_io.h"
 
 namespace {
 
@@ -197,6 +198,35 @@ int main() {
                 " ALU saturations, %" PRIu64 " memory and %" PRIu64 " voice-port accesses; translated == reference: %s; DAC hash %016" PRIx64 "\n",
                 programs, totals[4], totals[5], totals[0], totals[1], totals[2], totals[3], divergent ? "NO" : "yes", hash);
     if (hash != kGolden) { std::printf("FAIL: DAC hash differs from the recorded %016" PRIx64 "\n", kGolden); ++failures; }
+
+    // 4. State round trip: save mid-run, load into a fresh core, and both must continue identically.
+    int roundTripBad = 0;
+    for (uint64_t seed = 401; seed <= 460; ++seed) {
+        Rng r{seed};
+        std::vector<Line> body;
+        for (int i = 0, n = 40 + r.below(60); i < n; ++i) body.push_back(randomLine(r));
+        const auto prog = harness(body);
+        Esp2Core a; Rng ra{seed};
+        setup(a, prog, ra, seed % 2 == 0);
+        for (uint32_t d = 0x1E0; d <= 0x1EF; ++d) hostReg(a, d, ra.next() & 0xFFFFFF);   // non-zero data to move through RAM
+        for (uint64_t s = 0; s < 149; ++s) { feed(a, s); a.runTo((s + 1) * ips); a.sampleTick(); }
+        feed(a, 149);
+        a.runTo(149 * ips + 3 + seed % 40);              // save while the program is running (pipelines in flight)
+        StateWriter w; a.save(w);
+        Esp2Core b;
+        StateReader rd(w.bytes.data(), w.bytes.size());
+        b.load(rd);
+        CHECK(rd.ok() && rd.atEnd());
+        a.runTo(150 * ips); b.runTo(150 * ips);
+        a.sampleTick(); b.sampleTick();
+        for (uint64_t s = 150; s < 400; ++s) {
+            feed(a, s); feed(b, s);
+            a.runTo((s + 1) * ips); b.runTo((s + 1) * ips);
+            a.sampleTick(); b.sampleTick();
+            if (!diff(a, b).empty()) { if (!roundTripBad) std::printf("round trip seed %" PRIu64 ": %s\n", seed, diff(a, b).c_str()); ++roundTripBad; break; }
+        }
+    }
+    CHECK(roundTripBad == 0);
 
     std::printf("esp2_core_test: %s\n", failures ? "FAILED" : "passed");
     return failures ? 1 : 0;

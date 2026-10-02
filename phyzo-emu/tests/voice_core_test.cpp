@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <vector>
+#include "state_io.h"
 #include "voice_core.h"
 
 namespace {
@@ -119,11 +120,25 @@ int main() {
         }
         uint64_t h = 1469598103934665603ull;
         auto mix = [&](int64_t x) { h ^= uint64_t(x); h *= 1099511628211ull; };
+        Chip copy; copy.c.setBank(2, mem);
+        int copyMismatch = 0;
         for (int i = 0; i < 30000; ++i) {
             int32_t l, r; k.c.tick(l, r); mix(l); mix(r);
             for (int c = 0; c < VoiceCore::kChannels; ++c) { mix(k.c.chan[c][0]); mix(k.c.chan[c][1]); }
             if (i == 15000) k.reg(1, 0x18, 0x1FF);         // re-arm a ramp mid-way
+            if (i == 9000) {                                 // state round trip: a restored copy must continue identically
+                StateWriter w; k.c.save(w);
+                StateReader rd(w.bytes.data(), w.bytes.size());
+                copy.c.load(rd);
+                CHECK(rd.ok() && rd.atEnd());
+            }
+            if (i > 9000) {
+                int32_t cl, cr; copy.c.tick(cl, cr);
+                if (cl != l || cr != r) ++copyMismatch;
+                if (i == 15000) copy.reg(1, 0x18, 0x1FF);
+            }
         }
+        CHECK(copyMismatch == 0);
         CHECK(k.c.resonantSamples > 0 && k.c.bypassSamples > 0 && k.c.stateClamps > 0);
         const uint64_t kGolden = 0x45b54dbc7bf53247ull;   // recorded from the v0.6 core (2026-10-02)
         std::printf("voice_core_test: resonant samples %llu, bypass samples %llu, state saturations %llu; render hash %016" PRIx64 "\n",

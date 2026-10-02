@@ -175,3 +175,14 @@ epochs), `esp2stats <label>` (saturations, stale reads, region-bound violations,
 (ESP2 host commands only), `--esp2-ram-alias` (decode unmapped ESP2 addresses into RAM by their low 16 bits; default
 drops them). Every run writes `esp2_external_writes.csv` and lists CPU accesses outside the mapped devices; the clip
 report gives, per destination register, the count and the largest overshoot in 24-bit LSBs.
+
+## Plugin engine (src/engine.*, src/resampler.*)
+
+The plugin (`plugin/`) runs the machine through `Engine`, which has no plugin-framework code and is tested here
+(`engine_test`). It boots the OS (or restores a saved machine state) on a worker thread, then runs the machine per
+host audio block. MIDI bytes go to channel B at the machine cycle that matches their host sample position plus a
+constant latency, which the plugin reports to the host. The ESP2 DAC output (24-bit, 1.0 = 2^23) is converted from
+44.1 kHz to the host rate by `Resampler` (Kaiser windowed sinc, 128 taps at 44.1 kHz, about 100 dB accuracy, no
+added delay). `Machine::saveState()/loadState()` hold the complete machine (CPU, RAM, all devices, timing); flash
+and wave memory are not stored. Several machines can run in one process: Musashi's single CPU is shared under a
+lock, with each machine's CPU state parked while another one runs.

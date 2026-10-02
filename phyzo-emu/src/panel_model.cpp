@@ -1,6 +1,9 @@
 #include "panel_model.h"
 #include <cstdio>
 
+void PanelModel::log(PanelEvent e) { if (keepLog) transcript.push_back(std::move(e)); }
+void PanelModel::history(DisplayChange d) { if (keepLog) displayHistory.push_back(d); }
+
 void PanelModel::setFont(const uint8_t* font) {
     // Reverse map segment pattern -> character, preferring the most readable glyph.
     // '?' first so the "unknown" pattern decodes as '?'; digits before letters (0 vs O).
@@ -30,7 +33,7 @@ int PanelModel::expectedData(uint8_t st) const {
 void PanelModel::onOsByte(uint8_t b, uint64_t cycle) {
     if (b & 0x80) {
         if (!msg_.empty()) {
-            transcript.push_back({msgStart_, true, msg_, "incomplete message"});
+            log({msgStart_, true, msg_, "incomplete message"});
             ++unknownMessages;
             msg_.clear();
         }
@@ -45,7 +48,7 @@ void PanelModel::onOsByte(uint8_t b, uint64_t cycle) {
             msg_.push_back(status_);
             msgStart_ = cycle;
         } else {
-            transcript.push_back({cycle, true, {b}, "orphan data byte"});
+            log({cycle, true, {b}, "orphan data byte"});
             ++unknownMessages;
             return;
         }
@@ -63,21 +66,21 @@ void PanelModel::complete() {
         d = (msg_.size() > 1 && msg_[1] == 0x33) ? "hello" : "F0 with unexpected data";
         if (replyHello && msg_.size() > 1 && msg_[1] == 0x33 && sendToOs) {
             uint64_t when = msgStart_ + uint64_t(helloDelayMs * cyclesPerMs);
-            transcript.push_back({msgStart_, true, msg_, d});
+            log({msgStart_, true, msg_, d});
             msg_.clear();
             sendToOs({0xf0, 0x33}, when);
-            transcript.push_back({when, false, {0xf0, 0x33}, "hello reply (panel model)"});
+            log({when, false, {0xf0, 0x33}, "hello reply (panel model)"});
             return;
         }
     } else if (st == 0xf2) {
         ++f2Count;
         d = "F2 handshake";
         if (replyF2 >= 0 && sendToOs) {
-            transcript.push_back({msgStart_, true, msg_, d});
+            log({msgStart_, true, msg_, d});
             msg_.clear();
             uint64_t when = msgStart_ + uint64_t(helloDelayMs * cyclesPerMs);
             sendToOs({0xf2, uint8_t(replyF2 & 0x7f)}, when);
-            transcript.push_back({when, false, {0xf2, uint8_t(replyF2 & 0x7f)}, "F2 reply (panel model)"});
+            log({when, false, {0xf2, uint8_t(replyF2 & 0x7f)}, "F2 reply (panel model)"});
             return;
         }
     } else if (st == 0xf3) {
@@ -86,7 +89,7 @@ void PanelModel::complete() {
         ++f4Count;
         d = "F4 request: report all analog controls";
         if (answerF4Value >= 0 && sendToOs) {
-            transcript.push_back({msgStart_, true, msg_, d});
+            log({msgStart_, true, msg_, d});
             msg_.clear();
             std::vector<uint8_t> out;
             int v = answerF4Value & 0x3ff;
@@ -98,7 +101,7 @@ void PanelModel::complete() {
             uint64_t when = msgStart_ + uint64_t(helloDelayMs * cyclesPerMs);
             sendToOs(out, when);
             std::snprintf(buf, sizeof buf, "26 control reports, value %d (panel model)", v);
-            transcript.push_back({when, false, out, buf});
+            log({when, false, out, buf});
             return;
         }
     } else if (st >= 0x93 && st <= 0x96 && msg_.size() > 1) {
@@ -111,14 +114,14 @@ void PanelModel::complete() {
         d = buf;
         if (t != text_ || displayHistory.empty() || displayHistory.back().raw != raw_) {
             text_ = t;
-            displayHistory.push_back({msgStart_, t, raw_, dots_});
+            history({msgStart_, t, raw_, dots_});
         }
     } else if (st == 0x97 && msg_.size() > 1) {
         dots_ = msg_[1];
         std::snprintf(buf, sizeof buf, "dots = %02X%s%s", dots_, (dots_ & 8) ? " colon" : "",
                       (dots_ & 4) ? " point" : "");
         d = buf;
-        displayHistory.push_back({msgStart_, text_, raw_, dots_});
+        history({msgStart_, text_, raw_, dots_});
     } else if (st == 0x9d && msg_.size() > 2) {
         ledState[msg_[1]] = 2;
         std::snprintf(buf, sizeof buf, "LED %02X flashing, rate %02X", msg_[1], msg_[2]);
@@ -131,7 +134,7 @@ void PanelModel::complete() {
         ++unknownMessages;
         d = "unknown";
     }
-    transcript.push_back({msgStart_, true, msg_, d});
+    log({msgStart_, true, msg_, d});
     msg_.clear();
 }
 
@@ -139,10 +142,22 @@ void PanelModel::onResetPin(bool asserted, uint64_t cycle) {
     if (asserted == resetAsserted_) return;
     resetAsserted_ = asserted;
     if (!asserted) ++resetPulses;
-    transcript.push_back({cycle, true, {}, asserted ? "OP0 set (panel reset asserted)" : "OP0 cleared (panel reset released)"});
+    log({cycle, true, {}, asserted ? "OP0 set (panel reset asserted)" : "OP0 cleared (panel reset released)"});
 }
 
 void PanelModel::inject(const std::vector<uint8_t>& bytes, uint64_t cycle, const std::string& note) {
-    transcript.push_back({cycle, false, bytes, note});
+    log({cycle, false, bytes, note});
     if (sendToOs) sendToOs(bytes, cycle);
+}
+
+// ---------------------------------------------------------------- state (plugin projects)
+#include "state_io.h"
+
+void PanelModel::save(StateWriter& w) const {
+    w.put(raw_); w.put(dots_); w.str(text_); w.put(status_); w.vec(msg_); w.put(msgStart_); w.put(resetAsserted_);
+    w.map(ledState);
+}
+void PanelModel::load(StateReader& r) {
+    r.get(raw_); r.get(dots_); r.str(text_); r.get(status_); r.vec(msg_, 64); r.get(msgStart_); r.get(resetAsserted_);
+    r.map(ledState);
 }

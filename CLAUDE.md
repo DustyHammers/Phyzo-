@@ -45,3 +45,8 @@ owner step by step through anything they must do by hand on github.com or on the
   the downloadable zip. The ESP2 and voice-core tests hold golden hashes of the current output: a speed change
   that alters them has changed the sound.
 - Owner's install guide: `docs/INSTALL_MAC.md`.
+- Plugin architecture: `phyzo-emu/src/engine.*` (no JUCE) runs the machine per host block, boots/restores on a worker
+  thread, delivers MIDI sample-accurately with a constant reported latency, and converts 44.1 kHz to the host rate
+  (`resampler.*`). `plugin/` wraps it (JUCE) and scans `~/Documents/Phyzo/roms/`. Musashi has one global CPU:
+  machines take turns under a lock (`Machine::becomeCpuOwner`). Project state = complete machine state
+  (`Machine::saveState`), tied to the ROM checksums.

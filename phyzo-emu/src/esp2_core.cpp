@@ -715,3 +715,45 @@ void Esp2Core::sampleTick() {
         else { if (iozStatus_ && running()) ++overruns; iozStatus_ = true; }
     }
 }
+
+// ------------------------------------------------------------------ state (plugin projects)
+#include "state_io.h"
+
+void Esp2Core::save(StateWriter& w) const {
+    w.put(r_); w.put(imem_); w.vec(ram_); w.put(port_);
+    w.put(cycle_); w.put(pc_); w.put(npc_); w.put(biozArmed_); w.put(suspended_); w.put(iozStatus_);
+    w.put(ccr_); w.put(cmr_); w.put(refpt_); w.put(aluShift_); w.put(macLatch_); w.put(macp_); w.put(macrl_);
+    w.put(pcStack_); w.put(sp_); w.put(reptSt_); w.put(reptEnd_); w.put(reptCnt_);
+    w.put(aluPend_); w.put(aluPendPlain_); w.put(aluPendAddr_); w.put(aluPendVal_);
+    w.put(memPend_); w.put(dilPend_); w.put(dilPendLatch_); w.put(dilPendVal_);
+    w.put(ptrPend_); w.put(ptrN_); w.put(writer_);
+    w.put(control); w.put(lastControl); w.put(instrPerSample);
+    w.put(voicePort); w.put(serialIn); w.put(dacOut); w.put(auxOut);
+    const uint64_t stats[] = {regWrites, regReads, instrWrites, instrReads, controlWrites, readoutReads, mailboxReadsWhileRunning,
+                              mailboxReadsNonZero, badInstrAddr, executed, suspendedCycles, haltedCycles, biozPasses, biozSuspends,
+                              overruns, macSat, aluSat, dacSatSamples, ticks, memReads, memWrites, memUnmapped, voicePortReads,
+                              voicePortWrites, reservedMacOps, unknownSprReads, unknownSprWrites, satToDac, staleReads,
+                              regionViolations, extWrites};
+    w.put(stats);
+}
+
+void Esp2Core::load(StateReader& r) {
+    r.get(r_); r.get(imem_); r.vecExact(ram_, kRamWords); r.get(port_);
+    r.get(cycle_); r.get(pc_); r.get(npc_); r.get(biozArmed_); r.get(suspended_); r.get(iozStatus_);
+    r.get(ccr_); r.get(cmr_); r.get(refpt_); r.get(aluShift_); r.get(macLatch_); r.get(macp_); r.get(macrl_);
+    r.get(pcStack_); r.get(sp_); r.get(reptSt_); r.get(reptEnd_); r.get(reptCnt_);
+    r.get(aluPend_); r.get(aluPendPlain_); r.get(aluPendAddr_); r.get(aluPendVal_);
+    r.get(memPend_); r.get(dilPend_); r.get(dilPendLatch_); r.get(dilPendVal_);
+    r.get(ptrPend_); r.get(ptrN_); r.get(writer_);
+    r.get(control); r.get(lastControl); r.get(instrPerSample);
+    r.get(voicePort); r.get(serialIn); r.get(dacOut); r.get(auxOut);
+    uint64_t s[31] = {};
+    r.get(s);
+    uint64_t* dst[] = {&regWrites, &regReads, &instrWrites, &instrReads, &controlWrites, &readoutReads, &mailboxReadsWhileRunning,
+                       &mailboxReadsNonZero, &badInstrAddr, &executed, &suspendedCycles, &haltedCycles, &biozPasses, &biozSuspends,
+                       &overruns, &macSat, &aluSat, &dacSatSamples, &ticks, &memReads, &memWrites, &memUnmapped, &voicePortReads,
+                       &voicePortWrites, &reservedMacOps, &unknownSprReads, &unknownSprWrites, &satToDac, &staleReads,
+                       &regionViolations, &extWrites};
+    for (int i = 0; i < 31; ++i) *dst[i] = s[i];
+    for (int i = 0; i < kInstr; ++i) decode(i);      // the translation cache follows the instruction memory
+}

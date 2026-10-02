@@ -25,6 +25,9 @@
 #include <string>
 #include <vector>
 
+class StateWriter;
+class StateReader;
+
 class Esp2Core {
 public:
     static constexpr int kInstr = 300, kRegs = 1024;
@@ -43,6 +46,11 @@ public:
     // Sample-period edge (LRCLK / IOZ): latch serial outputs, load serial inputs, raise IOZ.
     void sampleTick();
     uint64_t cycle() const { return cycle_; }
+
+    // Chip state: registers, instruction memory, delay RAM, host port, pipelines, program control, outputs and the
+    // run statistics. Options (fastPath, specFixes, ...) and logs are not included.
+    void save(StateWriter& w) const;
+    void load(StateReader& r);
 
     // ---- board wiring ----
     // External memory: delay RAM at 0x600000 (size kRamWords), voice-chip channel port at 0xC00000.

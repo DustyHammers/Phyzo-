@@ -317,3 +317,41 @@ void Dma::start() {
     csr |= 0xc0;          // IRQ status + DONE (no interrupt: INTR = 0, INTN clear)
     ccr &= ~1;
 }
+
+// ---------------------------------------------------------------- state (plugin projects)
+#include "state_io.h"
+
+void Timer::save(StateWriter& w) const {
+    w.put(mcr); w.put(ir); w.put(cr); w.put(sr); w.put(prel1); w.put(prel2); w.put(com); w.put(timeouts);
+    w.put(on); w.put(anchor); w.put(loaded); w.put(nextZero);
+}
+void Timer::load(StateReader& r) {
+    r.get(mcr); r.get(ir); r.get(cr); r.get(sr); r.get(prel1); r.get(prel2); r.get(com); r.get(timeouts);
+    r.get(on); r.get(anchor); r.get(loaded); r.get(nextZero);
+}
+
+void Serial::save(StateWriter& w) const {
+    for (const SerialChannel& s : ch_) {
+        w.put(s.mr1); w.put(s.mr2); w.put(s.csr); w.put(s.txEn); w.put(s.rxEn);
+        w.put(s.holdFull); w.put(s.hold); w.put(s.shiftBusy); w.put(s.shiftByte); w.put(s.shiftDone);
+        w.deq(s.fifo); w.deq(s.pending); w.put(s.lastArrival); w.put(s.lastRead); w.put(s.byteCycles);
+        w.put(s.txBytes); w.put(s.rxBytes); w.put(s.txWhileDisabled); w.put(s.holdOverwrites);
+    }
+    w.put(ier); w.put(ilr); w.put(ivr); w.put(acr); w.put(opcr); w.put(op); w.put(mcr); w.put(isrBit3Reads);
+}
+void Serial::load(StateReader& r) {
+    for (SerialChannel& s : ch_) {
+        r.get(s.mr1); r.get(s.mr2); r.get(s.csr); r.get(s.txEn); r.get(s.rxEn);
+        r.get(s.holdFull); r.get(s.hold); r.get(s.shiftBusy); r.get(s.shiftByte); r.get(s.shiftDone);
+        r.deq(s.fifo); r.deq(s.pending); r.get(s.lastArrival); r.get(s.lastRead); r.get(s.byteCycles);
+        r.get(s.txBytes); r.get(s.rxBytes); r.get(s.txWhileDisabled); r.get(s.holdOverwrites);
+    }
+    r.get(ier); r.get(ilr); r.get(ivr); r.get(acr); r.get(opcr); r.get(op); r.get(mcr); r.get(isrBit3Reads);
+}
+
+void Dma::save(StateWriter& w) const {
+    w.put(mcr); w.put(intr); w.put(ccr); w.put(csr); w.put(fcr); w.put(sar); w.put(dar); w.put(btc); w.put(blocks); w.put(bytes);
+}
+void Dma::load(StateReader& r) {
+    r.get(mcr); r.get(intr); r.get(ccr); r.get(csr); r.get(fcr); r.get(sar); r.get(dar); r.get(btc); r.get(blocks); r.get(bytes);
+}
