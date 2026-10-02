@@ -29,12 +29,15 @@ Runtime: the plugin and tools load the two ROM files from the user's machine (se
 ## Phase 1 check (2026-10-02)
 - Builds from scratch on Linux with GCC 13 and Clang (emulator with Musashi 313ebf1, rombuilder); no errors.
 - Leftover names removed from comments and docs (no code behaviour changed): the original product's letter name
-  for the transwave-position knob (now "perf2"), a wave name containing the product name, the voice chip's
+  for the table-sweep position knob (now "perf2"), a wave name containing the product name, the voice chip's
   codename, the EPS-16+ project reference in `phyzo-emu/CMakeLists.txt` (credit stays in THIRD_PARTY_NOTICES.md),
   the full sampler model name in `eps_img.hpp` (now the kept format name "EPS .img"), and a sample-library name
   in the rombuilder README. The outdated plugin data path in ROM_FORMAT_SPEC.md now reads `~/Documents/Phyzo/roms/`.
 - Also kept: the chip part numbers MC68340, ES5506 and ESP2 (they identify the hardware being emulated and the public
-  documents and MAME devices cited), and the word "transwave" for the wave-sweep technique.
+  documents and MAME devices cited).
+- "Transwave" replaced by "table sweep" in code, comments and docs. Kept only as the two loop-mode tokens
+  `TranswaveForward`/`TranswaveBidirectional` that `rombuilder` matches in the EXP-3 text listing (input data);
+  the example commands now use the placeholder file name `exp3_listing.txt`.
 - MIDI/SysEx identity: our code carries MIDI bytes unchanged between the host and the OS's serial port; the
   manufacturer code, model number and message formats are produced and parsed by the OS itself.
 - ROM files are identified by MD5, not by name (`phyzo-emu/src/rom_id.*`, test `rom_id`); `phyzo_boot` and

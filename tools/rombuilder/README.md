@@ -16,7 +16,7 @@ source, every manifest wave resolvable by preset ID, every populated wave coveri
 overlaps. Any failure aborts with a non-zero exit code.
 
     rombuilder --manifest phyzo_wave_manifest.csv --sources rom_sources.csv --data-root DATA \
-               --exp3-text "EXP3 Transwaves.txt" --out phyzo_wave_rom.bin --report-dir report \
+               --exp3-text exp3_listing.txt --out phyzo_wave_rom.bin --report-dir report \
                [--rom-version 0.1] [--build-date 2026-10-01T12:00:00Z]
 
 Given the same inputs and `--build-date`, output is byte-identical.

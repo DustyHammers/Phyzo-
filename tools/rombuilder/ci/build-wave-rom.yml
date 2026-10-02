@@ -15,7 +15,7 @@ jobs:
       - run: |
           mkdir -p out/report out/renders
           ./build/rombuilder --manifest phyzo_wave_manifest.csv --sources rom_sources.csv --data-root WAVE_SOURCES \
-            --exp3-text "EXP3 Transwaves.txt" --out out/phyzo_wave_rom.bin --report-dir out/report --rom-version 0.1
+            --exp3-text exp3_listing.txt --out out/phyzo_wave_rom.bin --report-dir out/report --rom-version 0.1
           ./build/refplayer out/phyzo_wave_rom.bin out/renders
           python3 code/tools/rombuilder/regress/regress.py out/phyzo_wave_rom.bin out/renders regress_targets.csv out/report
       - uses: actions/upload-artifact@v4

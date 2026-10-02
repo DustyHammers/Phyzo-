@@ -122,12 +122,12 @@ The source rate is folded into `zone_pitch` by the builder:
 
 **Start Index position** (OS routine 0x1AC28), 8.8 fixed point:
 `p = StartIndex × 256 + (modValue × modAmount) / 128 + (offset − 64) × 256`, clamped to 0 … 0x7FFF (0–127.99).
-`offset` is a byte centred at 64 (most likely perf2, the transwave-position knob, Derived); the scale of `modValue` is still Open. `index = p >> 8`.
+`offset` is a byte centred at 64 (most likely perf2, the table-sweep position knob, Derived); the scale of `modValue` is still Open. `index = p >> 8`.
 
 **Sweep types**
 - `NONE` (0): window = `[loop_start, loop_end)`.
 - `TABLE` (1): stored frames. `frame = index * N / 128` (integer), clamped to the last frame; window =
-  `[loop_start + frame*W, loop_start + (frame+1)*W)`. Used for native loop mode 6 and all EXP-3 transwaves.
+  `[loop_start + frame*W, loop_start + (frame+1)*W)`. Used for native loop mode 6 and all EXP-3 table-sweep waves.
 - `STRETCH` (2): native loop mode 5, single cycle of length L stored. Shift
   `s = p * smax(key) / 32768` (integer; equals `index * smax(key) / 128` for whole indices), `smax(key) = 0x1800` for key ≤ 66, else `max(0, 0x5A00 - 256*key)`.
   Window = the last `L * 2^(s/3072)` samples ending at the cycle end; reads before the cycle return 0

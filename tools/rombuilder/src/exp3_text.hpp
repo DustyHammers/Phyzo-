@@ -1,4 +1,4 @@
-// Parser for the EXP-3 transwave text listing ("Wave NAME:" / "Sample n:" / "Loop:" / "Keys:" blocks).
+// Parser for the EXP-3 text listing ("Wave NAME:" / "Sample n:" / "Loop:" / "Keys:" blocks).
 // Note names use C-2 = MIDI 0.
 #pragma once
 #include <map>
