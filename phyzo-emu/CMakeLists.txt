@@ -68,12 +68,17 @@ foreach(variant fast trace)
 endforeach()
 
 # The emulator as a library (fast core): used by the plugin and the tests.
+# One static library with the Musashi core inside (the core and our glue call each other).
 add_library(phyzo_core STATIC
   src/machine.cpp src/mc68340.cpp src/esp2_stub.cpp src/esp2_core.cpp src/voice_core.cpp src/panel_model.cpp
-  src/os_image.cpp src/rom_id.cpp src/musashi_glue.cpp)
-target_include_directories(phyzo_core PUBLIC src)
-target_link_libraries(phyzo_core PUBLIC musashi_fast)
-target_compile_options(phyzo_core PRIVATE -Wall -Wextra)
+  src/os_image.cpp src/rom_id.cpp src/musashi_glue.cpp src/resampler.cpp src/engine.cpp
+  ${MUSASHI_SOURCES})
+target_include_directories(phyzo_core PUBLIC src PRIVATE "${MUSASHI_DIR}" "${MUSASHI_DIR}/softfloat" "${GENERATED_DIR}")
+find_package(Threads REQUIRED)
+target_link_libraries(phyzo_core PUBLIC Threads::Threads m)
+target_compile_options(phyzo_core PRIVATE
+  "$<$<COMPILE_LANGUAGE:C>:-include${CMAKE_CURRENT_SOURCE_DIR}/src/musashi_config.h;-w>"
+  "$<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra>")
 set_target_properties(phyzo_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 set(HARNESS_SOURCES
@@ -150,3 +155,11 @@ target_include_directories(machine_test PRIVATE src)
 target_link_libraries(machine_test PRIVATE musashi_fast)
 target_compile_options(machine_test PRIVATE -Wall -Wextra)
 add_test(NAME machine COMMAND machine_test)
+add_executable(resampler_test tests/resampler_test.cpp src/resampler.cpp)
+target_include_directories(resampler_test PRIVATE src)
+target_compile_options(resampler_test PRIVATE -Wall -Wextra)
+add_test(NAME resampler COMMAND resampler_test)
+add_executable(engine_test tests/engine_test.cpp)
+target_link_libraries(engine_test PRIVATE phyzo_core)
+target_compile_options(engine_test PRIVATE -Wall -Wextra)
+add_test(NAME engine COMMAND engine_test)

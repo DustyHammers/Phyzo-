@@ -1,0 +1,288 @@
+#include "engine.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include "machine.h"
+#include "os_image.h"
+#include "os_profile.h"
+#include "state_io.h"
+
+namespace {
+constexpr uint32_t kEngineStateVersion = 1;
+
+struct Blob { std::string osMd5, waveMd5; std::vector<uint8_t> machine; };
+
+std::vector<uint8_t> packBlob(const Blob& b) {
+    StateWriter w;
+    w.raw("PHZE", 4); w.put(kEngineStateVersion); w.str(b.osMd5); w.str(b.waveMd5); w.vec(b.machine);
+    return std::move(w.bytes);
+}
+bool unpackBlob(const std::vector<uint8_t>& data, Blob& b) {
+    StateReader r(data.data(), data.size());
+    char magic[4] = {};
+    r.raw(magic, 4);
+    if (!r.ok() || std::memcmp(magic, "PHZE", 4) != 0 || r.get<uint32_t>() != kEngineStateVersion) return false;
+    r.str(b.osMd5); r.str(b.waveMd5); r.vec(b.machine);
+    return r.ok();
+}
+}  // namespace
+
+Engine::Engine() = default;
+
+Engine::~Engine() {
+    stopJob();
+    std::lock_guard<std::mutex> lk(mtx_);
+    live_.reset();
+}
+
+// ------------------------------------------------------------------ message thread
+
+void Engine::setRoms(const std::string& osPath, const std::string& wavePath, const std::string& osMd5, const std::string& waveMd5) {
+    const bool same = osMd5 == osMd5_ && waveMd5 == waveMd5_ && state_.load() != State::NoRoms;
+    osPath_ = osPath; wavePath_ = wavePath; osMd5_ = osMd5; waveMd5_ = waveMd5;
+    if (same) return;
+    std::vector<uint8_t> machine;
+    if (!pendingState_.empty()) {
+        Blob b;
+        if (unpackBlob(pendingState_, b) && b.osMd5 == osMd5 && b.waveMd5 == waveMd5) machine = std::move(b.machine);
+        else setMessage("The saved state was made with other ROM files, so the synth starts fresh.");
+        pendingState_.clear();
+    }
+    startJob(std::move(machine));
+}
+
+std::vector<uint8_t> Engine::getState() {
+    {
+        std::lock_guard<std::mutex> lk(mtx_);
+        if (live_ && state_.load() == State::Running) return packBlob({osMd5_, waveMd5_, live_->saveState()});
+    }
+    return pendingState_;
+}
+
+void Engine::setState(const std::vector<uint8_t>& blob) {
+    Blob b;
+    if (!unpackBlob(blob, b)) { setMessage("The saved state could not be read, so the synth keeps its current state."); return; }
+    if (state_.load() == State::NoRoms || osMd5_.empty()) { pendingState_ = blob; return; }
+    if (b.osMd5 != osMd5_ || b.waveMd5 != waveMd5_) {
+        setMessage("The saved state was made with other ROM files, so the synth keeps its current state.");
+        return;
+    }
+    startJob(std::move(b.machine));
+}
+
+void Engine::pressButton(int osButton, bool down) {
+    const uint32_t head = btnHead_.load(std::memory_order_relaxed);
+    if (head - btnTail_.load(std::memory_order_acquire) >= uint32_t(kButtonRing)) return;   // full: drop
+    buttons_[head % kButtonRing].store(uint16_t((osButton << 1) | (down ? 1 : 0)), std::memory_order_relaxed);
+    btnHead_.store(head + 1, std::memory_order_release);
+}
+
+void Engine::service() {
+    if (rebootRequested_.exchange(false)) startJob({});
+}
+
+std::string Engine::message() const { std::lock_guard<std::mutex> lk(msgMtx_); return message_; }
+void Engine::setMessage(const std::string& s) { std::lock_guard<std::mutex> lk(msgMtx_); message_ = s; }
+
+std::array<char, 4> Engine::display() const {
+    const uint32_t c = chars_.load();
+    return {char(c >> 24), char(c >> 16), char(c >> 8), char(c)};
+}
+
+// ------------------------------------------------------------------ worker: boot or restore a machine
+
+void Engine::stopJob() {
+    cancel_ = true;
+    if (worker_.joinable()) worker_.join();
+    cancel_ = false;
+}
+
+void Engine::startJob(std::vector<uint8_t> state) {
+    stopJob();
+    const uint64_t gen = ++generation_;
+    state_ = State::Booting;
+    worker_ = std::thread(&Engine::runJob, this, osPath_, wavePath_, std::move(state), gen);
+}
+
+void Engine::fail(const std::string& reason) {
+    setMessage(reason);
+    state_ = State::Stopped;
+}
+
+void Engine::runJob(std::string osPath, std::string wavePath, std::vector<uint8_t> state, uint64_t generation) {
+    OsImage os; std::string err;
+    if (!os.load(osPath, err)) { fail("Cannot read the OS image: " + err); return; }
+    auto make = [&](std::unique_ptr<Machine>& m) {
+        m = std::make_unique<Machine>();
+        Machine::Config cfg;
+        if (!m->init(os, cfg, err) || !m->loadWaveMemory(wavePath, err)) return false;
+        m->panel.keepLog = false;
+        m->captureAudio = true;
+        m->audio.reserve(1 << 16); m->wet.reserve(1 << 16);
+        return true;
+    };
+    std::unique_ptr<Machine> m;
+    if (!make(m)) { fail("The emulator could not start: " + err); return; }
+
+    bool restored = false;
+    if (!state.empty()) {
+        if (m->loadState(state, err)) restored = true;
+        else {
+            setMessage("The saved state could not be restored (" + err + "), so the synth starts fresh.");
+            if (!make(m)) { fail("The emulator could not start: " + err); return; }
+        }
+    }
+    if (!restored) {                     // cold boot to the preset display, then let it settle
+        const uint64_t limit = m->cyclesFromMs(kBootLimitMs);
+        bool shown = false;
+        while (!cancel_ && m->cycles() < limit && !shown) {
+            Machine::Stop st = m->runUntil(m->cycles() + m->cyclesFromMs(20), [&] { return m->panel.text() == kBootDisplay; });
+            m->audio.clear(); m->wet.clear();
+            publishDisplay(*m);
+            if (st == Machine::Stop::Trap || st == Machine::Stop::HardStall) { fail("The synth's OS stopped while booting: " + (st == Machine::Stop::Trap ? m->trapReason : std::string("error loop"))); return; }
+            shown = st == Machine::Stop::Predicate;
+        }
+        const uint64_t settleEnd = m->cycles() + m->cyclesFromMs(kSettleMs);
+        while (!cancel_ && m->cycles() < settleEnd) {
+            m->runUntil(std::min(settleEnd, m->cycles() + m->cyclesFromMs(20)));
+            m->audio.clear(); m->wet.clear();
+            publishDisplay(*m);
+        }
+        if (cancel_) return;
+    }
+    if (cancel_) return;
+    // Panel ids of the +/Yes (OS button 1) and -/No (OS button 0) buttons, from the image's own table.
+    uint8_t raw[2] = {0, 0}; bool found[2] = {false, false};
+    for (uint32_t i = 0; i < profile::kButtonMapLen; ++i) {
+        const uint8_t id = os.at(profile::kButtonMap + i);
+        if (id < 2 && !found[id]) { raw[id] = uint8_t(i); found[id] = true; }
+    }
+    publishDisplay(*m);
+    install(std::move(m), generation, raw[1], raw[0]);
+}
+
+void Engine::install(std::unique_ptr<Machine> m, uint64_t generation, uint8_t rawPlus, uint8_t rawMinus) {
+    {
+        std::lock_guard<std::mutex> lk(mtx_);
+        if (generation != generation_.load()) return;           // a newer job replaced this one
+        live_.swap(m);
+        rawPlus_ = rawPlus; rawMinus_ = rawMinus;
+        retime_ = true;
+        state_ = State::Running;
+    }
+    // the previous machine (if any) is destroyed here, outside the audio lock
+}
+
+void Engine::publishDisplay(Machine& m) {
+    const std::string t = m.panel.text();
+    uint32_t c = 0;
+    for (int i = 0; i < 4; ++i) c = (c << 8) | uint8_t(i < int(t.size()) ? t[size_t(i)] : ' ');
+    chars_ = c;
+    dots_ = m.panel.dots();
+}
+
+// ------------------------------------------------------------------ audio thread
+
+void Engine::prepare(double hostRate, int maxBlock) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    hostRate_ = hostRate;
+    resampler_.setup(44100, int(std::lround(hostRate)));
+    retime_ = true;
+    const double r = 44100.0 / hostRate;
+    const size_t cap = size_t(std::ceil(maxBlock * r)) + size_t(resampler_.lookahead()) + 4096;
+    inL_.assign(cap, 0.0f); inR_.assign(cap, 0.0f);
+    latency_ = int(std::ceil((resampler_.lookahead() + marginIn_) / r));
+}
+
+void Engine::drainButtons(Machine& m) {
+    uint32_t tail = btnTail_.load(std::memory_order_relaxed);
+    const uint32_t head = btnHead_.load(std::memory_order_acquire);
+    for (; tail != head; ++tail) {
+        const uint16_t v = buttons_[tail % kButtonRing].load(std::memory_order_relaxed);
+        const uint8_t raw = (v >> 1) == 1 ? rawPlus_ : rawMinus_;
+        m.panel.inject({uint8_t((v & 1) ? 0x81 : 0x80), raw}, m.cycles(), std::string());
+    }
+    btnTail_.store(tail, std::memory_order_release);
+}
+
+void Engine::process(float* left, float* right, int n, const MidiEvent* events, int numEvents) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (!live_ || state_.load() != State::Running || hostRate_ <= 0) {
+        std::fill(left, left + n, 0.0f); std::fill(right, right + n, 0.0f);
+        return;
+    }
+    Machine& m = *live_;
+    if (retime_) {
+        resampler_.reset();
+        m.audio.clear(); m.wet.clear();
+        anchorSample_ = m.samplesProduced();
+        hostPos_ = 0;
+        retime_ = false;
+    }
+    drainButtons(m);
+
+    // MIDI: each event goes to the MIDI port at its exact time plus the constant latency.
+    const double r = 44100.0 / hostRate_, cyclesPerSample = m.config().cpuHz / 44100.0;
+    for (int i = 0; i < numEvents; ++i) {
+        const double s = double(anchorSample_) + double(hostPos_ + events[i].offset) * r + resampler_.lookahead() + marginIn_;
+        uint64_t at = uint64_t(s * cyclesPerSample);
+        if (at < m.cycles()) { at = m.cycles(); ++lateMidi_; }
+        midiTimes_[midiCount_++ % midiTimes_.size()] = at;
+        m.serial.queueRx(1, std::vector<uint8_t>(events[i].data, events[i].data + events[i].size), at);
+    }
+
+    // Run the machine until the converter has the input it needs for this block.
+    const int64_t need = resampler_.inputNeeded(n);
+    while (int64_t(m.wet.size() / 2) < need) {
+        const uint64_t target = m.samplesProduced() + uint64_t(need - int64_t(m.wet.size() / 2));
+        const Machine::Stop st = m.runUntil(std::max(m.cycles() + 1, m.cycleOfSample(target)));
+        if (st == Machine::Stop::Trap || st == Machine::Stop::HardStall) {
+            if (st == Machine::Stop::Trap && m.trapReason.rfind("reboot", 0) == 0) {
+                setMessage("The synth's OS restarted itself; booting again.");
+                rebootRequested_ = true;
+            } else {
+                std::string why = st == Machine::Stop::Trap ? m.trapReason : std::string("error loop");
+                if (st == Machine::Stop::HardStall)
+                    for (const auto& e : profile::kErrorLoops) if (e.pc == m.stallPc) why = e.meaning;
+                setMessage("The synth's OS stopped: " + why);
+            }
+            state_ = State::Stopped;
+            std::fill(left, left + n, 0.0f); std::fill(right, right + n, 0.0f);
+            return;
+        }
+    }
+    const size_t got = m.wet.size() / 2;
+    if (inL_.size() < got) { inL_.resize(got); inR_.resize(got); }
+    for (size_t i = 0; i < got; ++i) {
+        inL_[i] = float(m.wet[2 * i]) * (1.0f / 8388608.0f);      // 24-bit DAC words, 1.0 = full scale
+        inR_[i] = float(m.wet[2 * i + 1]) * (1.0f / 8388608.0f);
+    }
+    resampler_.push(inL_.data(), inR_.data(), int(got));
+    m.wet.clear(); m.audio.clear(); m.midiOut.clear();
+    resampler_.produce(left, right, n);
+    hostPos_ += n;
+    publishDisplay(m);
+}
+
+// ------------------------------------------------------------------ tests
+
+std::vector<uint8_t> Engine::machineStateForTest() {
+    std::lock_guard<std::mutex> lk(mtx_);
+    return live_ ? live_->saveState() : std::vector<uint8_t>();
+}
+
+uint32_t Engine::peekForTest(uint32_t addr, int size) {
+    std::lock_guard<std::mutex> lk(mtx_);
+    return live_ ? live_->peek(addr, size) : 0;
+}
+
+std::vector<uint64_t> Engine::midiQueueForTest() {
+    std::lock_guard<std::mutex> lk(mtx_);
+    std::vector<uint64_t> t;
+    for (uint64_t i = midiCount_ > midiTimes_.size() ? midiCount_ - midiTimes_.size() : 0; i < midiCount_; ++i)
+        t.push_back(midiTimes_[i % midiTimes_.size()]);
+    return t;
+}
+uint64_t Engine::anchorForTest() { std::lock_guard<std::mutex> lk(mtx_); return anchorSample_; }
+double Engine::cpuHzForTest() { std::lock_guard<std::mutex> lk(mtx_); return live_ ? live_->config().cpuHz : 0; }
