@@ -68,6 +68,27 @@ Repeat step 4 every time you install a new build.
 
 If REAPER reports that the plugin failed to load, repeat step 4 and restart REAPER.
 
+## 6. Put your ROM files in place
+
+Phyzo looks for its two ROM files in one fixed folder: **Documents > Phyzo > roms**
+(`/Users/<you>/Documents/Phyzo/roms/`). The plugin creates the folder the first time it opens. Copy the OS image and
+the native wave image into it. File names do not matter: each file is recognised by its checksum. While a file is
+missing, the plugin window says which one and checks the folder again every two seconds, so the synth starts by
+itself a moment after you copy the files in; there is no need to reload the plugin.
+
+## 7. The plugin window (temporary, until the panel skin)
+
+- The synth's 4-character display. While the synth boots it shows what the OS writes; then the preset (e.g. `P 01`).
+- **◀ −** and **+ ▶** press the synth's own −/No and +/Yes buttons: on the preset display they step to the previous
+  or next preset. Holding one repeats, as on the hardware.
+- ROM status and engine status: running, with the host sample rate, or a plain-language message if something stopped.
+- **Debug**: CPU use per audio block (average and peak over the last second, one bar per second), the block size and
+  length, the last block's processing time, and **overruns** (blocks that took longer than their real-time budget;
+  any overrun can be heard as a dropout).
+
+Play Phyzo from a MIDI track. Everything the synth does (including the selected preset and any edits made over
+MIDI) is saved with the REAPER project and restored when you open it.
+
 ## Uninstalling
 
 Quit REAPER and move `Phyzo.vst3` and `Phyzo.component` (in `~/Library/Audio/Plug-Ins/...` or
