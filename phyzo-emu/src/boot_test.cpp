@@ -21,14 +21,14 @@ namespace {
 struct Options {
     std::string os, out = "boot_out", expect = "P 01", wave, roms;
     double bootMs = 8000, settleMs = 1000, idleMs = 5000;
-    bool buttons = true, mailboxRule = true, notes = true, esp2Stub = false, esp2Checkpoint = false;
+    bool buttons = true, mailboxRule = true, notes = true, esp2Stub = false, esp2Checkpoint = false, noAnswerF4 = false;
     int answerF4 = -1, f2Reply = -1;
     double cpuHz = 16.0e6;
 };
 
 void usage() {
     std::puts("usage: phyzo_boot (--os <image> | --roms <folder>) [--out dir] [--expect \"P 01\"] [--boot-ms N] [--settle-ms N]\n"
-              "               [--idle-ms N] [--no-buttons] [--no-notes] [--esp2-stub] [--no-mailbox-rule] [--answer-f4 V] [--f2-reply XX]\n"
+              "               [--idle-ms N] [--no-buttons] [--no-notes] [--esp2-stub] [--no-mailbox-rule] [--answer-f4 V | --no-answer-f4] [--f2-reply XX]\n"
               "               [--cpu-hz HZ] [--wave native_wave_image.bin]");
 }
 
@@ -65,6 +65,7 @@ int main(int argc, char** argv) {
         else if (a == "--esp2-stub") o.esp2Stub = true;
         else if (a == "--esp2-checkpoint") o.esp2Checkpoint = true;
         else if (a == "--answer-f4") o.answerF4 = std::atoi(next().c_str());
+        else if (a == "--no-answer-f4") o.noAnswerF4 = true;
         else if (a == "--f2-reply") o.f2Reply = int(std::strtol(next().c_str(), nullptr, 16));
         else if (a == "--cpu-hz") o.cpuHz = std::atof(next().c_str());
         else { usage(); return 2; }
@@ -94,6 +95,7 @@ int main(int argc, char** argv) {
     m.esp2stub.mailboxAutoClear = o.mailboxRule;
     m.esp2.specFixes = !o.esp2Checkpoint;
     m.panel.answerF4Value = o.answerF4;
+    m.panel.answerF4 = !o.noAnswerF4;
     m.panel.replyF2 = o.f2Reply;
 
     FILE* sum = std::fopen((o.out + "/summary.txt").c_str(), "w");
@@ -109,7 +111,8 @@ int main(int argc, char** argv) {
     both("os_image: %s\nos_size: %zu\nos_md5: %s\nos_header_body_end: 0x%08X\nos_header_entry: 0x%08X\n",
          os.path.c_str(), os.bytes.size(), os.md5.c_str(), os.bodyEnd, os.entry);
     both("os_trailer_sum: stored 0x%08X computed 0x%08X %s\n", os.storedSum, os.computedSum, os.sumOk ? "OK" : "MISMATCH");
-    both("cpu_hz: %.0f\nesp2: %s\nesp2_mailbox_rule: %s\npanel_answer_f4: %d\n", cfg.cpuHz, o.esp2Stub ? "placeholder" : "core", o.esp2Stub ? (o.mailboxRule ? "on" : "off") : "n/a (microcode)", o.answerF4);
+    both("cpu_hz: %.0f\nesp2: %s\nesp2_mailbox_rule: %s\npanel_answer_f4: %s\n", cfg.cpuHz, o.esp2Stub ? "placeholder" : "core", o.esp2Stub ? (o.mailboxRule ? "on" : "off") : "n/a (microcode)",
+         o.noAnswerF4 ? "off" : o.answerF4 >= 0 ? std::to_string(o.answerF4).c_str() : "panel positions");
 
     // Button translation: OS button id -> raw panel id, from the image's own table.
     int rawFor[64]; std::fill(rawFor, rawFor + 64, -1);
@@ -137,6 +140,7 @@ int main(int argc, char** argv) {
     const char* stopName[] = {"time limit", "trap", "hard stall", "expected display"};
     both("\n[boot]\nstop: %s\nemulated_ms: %.3f\nhost_s: %.4f\n", stopName[int(stop)], m.ms(bootCycles), bootHost);
     if (pass) both("expected_display_at_ms: %.3f\n", m.ms(expectAt));
+    if (!o.esp2Stub) both("esp2_reg_0F9: 0x%06X\n", m.esp2.reg(0x0F9));
     if (stop == Machine::Stop::Trap) both("trap: %s (PPC 0x%06X)\n", m.trapReason.c_str(), m.trapPc);
     if (stop == Machine::Stop::HardStall) {
         const char* why = "unknown bra * loop";

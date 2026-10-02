@@ -88,19 +88,20 @@ void PanelModel::complete() {
     } else if (st == 0xf4) {
         ++f4Count;
         d = "F4 request: report all analog controls";
-        if (answerF4Value >= 0 && sendToOs) {
+        if ((answerF4 || answerF4Value >= 0) && sendToOs) {
             log({msgStart_, true, msg_, d});
             msg_.clear();
             std::vector<uint8_t> out;
-            int v = answerF4Value & 0x3ff;
-            for (uint8_t i = 0; i < 26; ++i) {
+            for (uint8_t i = 0; i < kControls; ++i) {      // one message per control, in cc order
+                const int v = (answerF4Value >= 0 ? answerF4Value : controls[i]) & 0x3ff;
                 out.push_back(uint8_t(0xb0 | ((v >> 7) & 7)));
                 out.push_back(i);
                 out.push_back(uint8_t(v & 0x7f));
             }
             uint64_t when = msgStart_ + uint64_t(helloDelayMs * cyclesPerMs);
             sendToOs(out, when);
-            std::snprintf(buf, sizeof buf, "26 control reports, value %d (panel model)", v);
+            if (answerF4Value >= 0) std::snprintf(buf, sizeof buf, "26 control reports, value %d (panel model)", answerF4Value & 0x3ff);
+            else std::snprintf(buf, sizeof buf, "26 control reports, panel positions (panel model)");
             log({when, false, out, buf});
             return;
         }
@@ -145,6 +146,13 @@ void PanelModel::onResetPin(bool asserted, uint64_t cycle) {
     log({cycle, true, {}, asserted ? "OP0 set (panel reset asserted)" : "OP0 cleared (panel reset released)"});
 }
 
+void PanelModel::moveControl(int cc, int raw, uint64_t cycle) {
+    if (cc < 0 || cc >= kControls) return;
+    const int v = raw < 0 ? 0 : raw > 1023 ? 1023 : raw;
+    controls[size_t(cc)] = uint16_t(v);
+    inject({uint8_t(0xb0 | ((v >> 7) & 7)), uint8_t(cc), uint8_t(v & 0x7f)}, cycle, "control moved");
+}
+
 void PanelModel::inject(const std::vector<uint8_t>& bytes, uint64_t cycle, const std::string& note) {
     log({cycle, false, bytes, note});
     if (sendToOs) sendToOs(bytes, cycle);
@@ -156,8 +164,11 @@ void PanelModel::inject(const std::vector<uint8_t>& bytes, uint64_t cycle, const
 void PanelModel::save(StateWriter& w) const {
     w.put(raw_); w.put(dots_); w.str(text_); w.put(status_); w.vec(msg_); w.put(msgStart_); w.put(resetAsserted_);
     w.map(ledState);
+    w.put(controls);                                   // added after v0.3.0; older states end here
 }
 void PanelModel::load(StateReader& r) {
     r.get(raw_); r.get(dots_); r.str(text_); r.get(status_); r.vec(msg_, 64); r.get(msgStart_); r.get(resetAsserted_);
     r.map(ledState);
+    if (!r.atEnd()) r.get(controls);
+    else controls = kFreshControls;
 }

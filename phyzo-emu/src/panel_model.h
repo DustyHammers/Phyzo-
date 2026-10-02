@@ -39,7 +39,18 @@ public:
     bool replyHello = true;
     double helloDelayMs = 2.0;
     int replyF2 = -1;            // >= 0: answer F2 with "F2 xx"
-    int answerF4Value = -1;      // >= 0: answer F4 with all 26 controls at this 10-bit value
+    // Analog controls (docs/PANEL_CONTROLS.md): the panel's physical knob/wheel positions, raw 10-bit, in cc order.
+    static constexpr int kControls = 26;
+    static constexpr std::array<uint16_t, kControls> kFreshControls = {
+        102, 508, 698, 2, 512, 2, 516, 512, 5, 2, 4, 1023, 2, 516, 2, 516, 3, 3, 512, 3, 512, 3, 516,
+        512,                     // cc23 pitch wheel: must be 512, the OS takes the wheel's centre from it
+        0, 0};                   // cc24 mod wheel, cc25 pressure
+    std::array<uint16_t, kControls> controls = kFreshControls;
+    bool answerF4 = true;        // answer the OS's F4 request with all 26 positions
+    int answerF4Value = -1;      // >= 0: answer with this one value for every control (test override)
+
+    // A control moved: store the position and send one Bx cc vv with the new absolute value.
+    void moveControl(int cc, int raw, uint64_t cycle);
 
     void onOsByte(uint8_t b, uint64_t cycle);
     void onResetPin(bool asserted, uint64_t cycle);

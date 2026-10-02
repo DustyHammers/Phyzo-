@@ -85,6 +85,15 @@ int main() {
         CHECK(e.peekForTest(0x0BE00200, 1) == 0x90 || rate != 44100.0);
     }
 
+    // Knob move (panel control): applied to the running machine and kept as the position.
+    {
+        CHECK(e.controlPosition(11) == 1023 && e.controlPosition(23) == 512);   // fresh positions
+        e.setControl(11, 700);
+        std::vector<float> l(256), rr(256);
+        e.process(l.data(), rr.data(), 256, nullptr, 0);
+        CHECK(e.controlPosition(11) == 700);
+    }
+
     // Engine state round trip: a second engine restored from the first matches it exactly.
     {
         const std::vector<uint8_t> blob = e.getState();
@@ -97,6 +106,7 @@ int main() {
         CHECK(waitRunning(f));
         CHECK(f.machineStateForTest() == snap);
         CHECK(f.peekForTest(0x0BE00200, 2) == e.peekForTest(0x0BE00200, 2));
+        CHECK(f.controlPosition(11) == 700);                    // knob positions come back with the project
         // a state made with other ROM files is not applied
         Engine g;
         g.setState(blob);
