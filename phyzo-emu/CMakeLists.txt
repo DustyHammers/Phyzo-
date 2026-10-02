@@ -1,0 +1,115 @@
+cmake_minimum_required(VERSION 3.16)
+project(phyzo_emu VERSION 0.1.0 LANGUAGES C CXX)
+
+# Headless boot harness for an MC68340-based synthesizer OS.
+# Contains no manufacturer code or data: the OS image is supplied at run time.
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
+
+set(MUSASHI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/work/deps/Musashi" CACHE PATH "Musashi source directory")
+if(NOT EXISTS "${MUSASHI_DIR}/m68kcpu.c")
+  message(FATAL_ERROR "Musashi not found. Clone https://github.com/kstenerud/Musashi into ${MUSASHI_DIR} or set -DMUSASHI_DIR=...")
+endif()
+
+set(GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${GENERATED_DIR}")
+
+# Same opcode-table bounds patch as the EPS-16+ project (portable table walk).
+set(MUSASHI_INPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/musashi-input")
+set(MUSASHI_INPUT "${MUSASHI_INPUT_DIR}/m68k_in.c")
+file(MAKE_DIRECTORY "${MUSASHI_INPUT_DIR}")
+file(READ "${MUSASHI_DIR}/m68k_in.c" MUSASHI_INPUT_SOURCE)
+string(REPLACE "const opcode_handler_struct *ostruct;"
+  "const opcode_handler_struct *ostruct;\n\tconst opcode_handler_struct *table_end;"
+  MUSASHI_INPUT_SOURCE "${MUSASHI_INPUT_SOURCE}")
+string(REPLACE "ostruct = m68k_opcode_handler_table;"
+  "ostruct = m68k_opcode_handler_table;\n\ttable_end = m68k_opcode_handler_table + (sizeof(m68k_opcode_handler_table) / sizeof(m68k_opcode_handler_table[0])) - 1;"
+  MUSASHI_INPUT_SOURCE "${MUSASHI_INPUT_SOURCE}")
+string(REPLACE "while(ostruct->mask" "while(ostruct < table_end && ostruct->mask"
+  MUSASHI_INPUT_SOURCE "${MUSASHI_INPUT_SOURCE}")
+file(WRITE "${MUSASHI_INPUT}" "${MUSASHI_INPUT_SOURCE}")
+
+add_executable(m68kmake "${MUSASHI_DIR}/m68kmake.c")
+add_custom_command(
+  OUTPUT "${GENERATED_DIR}/m68kops.c" "${GENERATED_DIR}/m68kops.h"
+  COMMAND m68kmake "${GENERATED_DIR}" "${MUSASHI_INPUT}"
+  DEPENDS m68kmake "${MUSASHI_INPUT}"
+  VERBATIM)
+
+set(MUSASHI_SOURCES
+  "${MUSASHI_DIR}/m68kcpu.c"
+  "${MUSASHI_DIR}/m68kdasm.c"
+  "${MUSASHI_DIR}/softfloat/softfloat.c"
+  "${GENERATED_DIR}/m68kops.c")
+
+# Two builds of the core: "fast" (no per-instruction hook, used for speed
+# measurement) and "trace" (instruction hook for checkpoints and PC history).
+foreach(variant fast trace)
+  add_library(musashi_${variant} STATIC ${MUSASHI_SOURCES})
+  target_include_directories(musashi_${variant} PUBLIC
+    "${MUSASHI_DIR}" "${MUSASHI_DIR}/softfloat" "${GENERATED_DIR}")
+  target_compile_options(musashi_${variant} PRIVATE
+    "-include${CMAKE_CURRENT_SOURCE_DIR}/src/musashi_config.h" -w)
+  if(variant STREQUAL "trace")
+    target_compile_definitions(musashi_${variant} PRIVATE HARNESS_TRACE=1)
+  endif()
+  target_link_libraries(musashi_${variant} PUBLIC m)
+endforeach()
+
+set(HARNESS_SOURCES
+  src/machine.cpp
+  src/mc68340.cpp
+  src/esp2_stub.cpp
+  src/esp2_core.cpp
+  src/voice_core.cpp
+  src/panel_model.cpp
+  src/os_image.cpp
+  src/musashi_glue.cpp
+  src/boot_test.cpp)
+
+foreach(variant fast trace)
+  if(variant STREQUAL "fast")
+    set(exe phyzo_boot)
+  else()
+    set(exe phyzo_boot_trace)
+  endif()
+  add_executable(${exe} ${HARNESS_SOURCES})
+  target_include_directories(${exe} PRIVATE src)
+  target_link_libraries(${exe} PRIVATE musashi_${variant})
+  if(variant STREQUAL "trace")
+    target_compile_definitions(${exe} PRIVATE HARNESS_TRACE=1)
+  endif()
+  target_compile_options(${exe} PRIVATE -Wall -Wextra)
+endforeach()
+
+add_executable(os_disasm tools/os_disasm.cpp src/os_image.cpp)
+target_include_directories(os_disasm PRIVATE src)
+target_link_libraries(os_disasm PRIVATE musashi_fast)
+
+enable_testing()
+# The boot test needs the user's OS image; pass it at configure time.
+set(OS_IMAGE "" CACHE FILEPATH "Path to the OS image (user-supplied, never committed)")
+if(OS_IMAGE)
+  add_test(NAME boot_to_display COMMAND phyzo_boot --os "${OS_IMAGE}" --out "${CMAKE_CURRENT_BINARY_DIR}/boot_out" --expect "P 01")
+endif()
+
+# Script-driven player: boots the OS with the voice-chip core and renders WAV (fast core).
+add_executable(phyzo_play src/machine.cpp src/mc68340.cpp src/esp2_stub.cpp src/esp2_core.cpp src/voice_core.cpp src/panel_model.cpp
+  src/os_image.cpp src/musashi_glue.cpp src/play_main.cpp)
+target_include_directories(phyzo_play PRIVATE src)
+target_link_libraries(phyzo_play PRIVATE musashi_fast)
+target_compile_options(phyzo_play PRIVATE -Wall -Wextra)
+
+# Chip-level filter tests (sweep renders, stability stress, CPU bench); needs the user's OS and native wave image.
+add_executable(filter_test tools/filter_test.cpp src/voice_core.cpp src/os_image.cpp)
+target_include_directories(filter_test PRIVATE src)
+target_compile_options(filter_test PRIVATE -Wall -Wextra)
+
+# Chip-level ESP2 tests (testsine, bypass, instruction-rate bench); programs are read from the user's OS image.
+add_executable(esp2_test tools/esp2_test.cpp src/esp2_core.cpp src/os_image.cpp)
+target_include_directories(esp2_test PRIVATE src)
+target_compile_options(esp2_test PRIVATE -Wall -Wextra)

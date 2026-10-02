@@ -1,0 +1,168 @@
+# phyzo_boot: headless boot harness
+
+Boots an original synthesizer OS image on an emulated MC68340 machine with
+placeholder devices plus an emulated voice chip, and records what the OS does. No UI, no JUCE; audio is rendered to WAV by phyzo_play.
+It builds on Linux and macOS with CMake and a C++17 compiler.
+
+The repository contains **no manufacturer code or data**. The OS image is a
+user-supplied file passed on the command line; every table the harness uses
+(segment font, button map) is read from that image at run time. The addresses in
+`src/os_profile.h` come from our own analysis and locate things in the image;
+they are not copied content.
+
+## What is emulated
+
+| Part | Model |
+|---|---|
+| CPU | Musashi in 68020 mode (the OS uses only instructions common to CPU32 and 68020) |
+| Flash 0x0–0xFFFFF | Read-only; synthetic vector table and trap stubs below 0x4000; OS at 0x4000; rest erased (0xFF) |
+| RAM 0x0BE00000–0x0BE3FFFF | 256 KB, zero-filled at start |
+| 68340 timer 1 | Counts down from PREL1 at fsys/2, sets TO, reloads; IRQ at the IR level when CR.IE2 |
+| 68340 serial A/B | Holding + shift register transmitter, 3-byte receive FIFO, paced input; ISR bit 3 reads 0 |
+| 68340 DMA ch1 | Copies BTC bytes per start (byte/byte, SAPI/DAPI), leaves SAR advanced |
+| ESP2 | emulated (src/esp2_core.*): runs the microcode the OS loads; see "ESP2 core" below. The boot-milestone placeholder remains as `--esp2-stub` |
+| Voice chip | emulated (src/voice_core.*): 48 voices, loop-end IRQ on level 5, wave memory from `--wave`; see "Voice-chip core" below |
+| Front panel | Serial channel A model: answers the hello, decodes display and LED messages |
+| Everything else | Reads 0, writes ignored, logged |
+
+Boot-ROM services are host traps: reboot (vector slot 1), OS update (slot 254),
+and an unexpected exception lands on a per-vector stub. Slot 251 (flash write) is
+left null, so the OS skips saves.
+
+## Build
+
+```sh
+git clone https://github.com/kstenerud/Musashi work/deps/Musashi
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+```
+
+Targets: `phyzo_boot` (fast core, used for speed figures), `phyzo_boot_trace`
+(per-instruction hook: boot checkpoints and PC history), `os_disasm`.
+
+## Run
+
+```sh
+./build/phyzo_boot_trace --os /path/to/os_image.bin --out boot_out
+```
+
+Options: `--expect "P 01"`, `--boot-ms`, `--settle-ms`, `--idle-ms`,
+`--no-buttons`, `--no-notes`, `--no-mailbox-rule`, `--answer-f4 <0..1023>`,
+`--f2-reply <hex>`, `--cpu-hz`.
+
+The run boots until the display shows the expected text, settles for one second,
+runs the button tests, plays one panel key and one MIDI note, then runs idle for
+the speed measurement. Exit code 0 means boot and button test passed.
+
+Outputs in `--out`:
+
+| File | Contents |
+|---|---|
+| `summary.txt` | Baseline check, stop reason, checkpoints, display history, button results, device statistics, speed |
+| `panel_transcript.txt` | Every byte between OS and panel, decoded |
+| `midi_out.txt` | Channel B output |
+| `voice_writes.csv` | Every voice-chip register write |
+| `esp2_commands.csv` | Every ESP2 register and instruction command, and control writes |
+| `unmapped_accesses.csv` | Accesses outside the modelled devices, aggregated |
+
+**The trace files quote values produced by the OS (ESP2 microcode, register
+images). Keep them out of this repository.** `.gitignore` excludes the usual output
+locations.
+
+`ctest` runs the boot test when configured with `-DOS_IMAGE=/path/to/image`.
+
+## Voice-chip core (src/voice_core.*)
+
+The voice chip at 0x00400000 is now emulated: 48 voices, one flat page of 32 longword registers per voice
+(page select 0x7C), ACTV/MODE/IRQV globals, 44.1 kHz output. Each CPU slice ends on a sample boundary, so
+register writes take effect within one sample. Wave memory: `--wave <native image>` loads the 4 MB image
+built by `rombuilder --native-out` into bank 2 (chip addresses 0x20000000 + n). The bank comes from address
+bits 28-29 of START/END/ACCUM.
+
+Modelled: ES5506 linear interpolation (11-bit fraction), FC with 11 fraction bits, END fraction (4 bits,
+0x34) and ACCUM fraction (11 bits, 0x3C), forward/bidirectional loops, BLE+LEI one-shot latches, loop-end IRQ
+on level 5 (IRQV read acknowledges), STOP0 at the end of one-shots, CR bit 19 as a start strobe, signed 8.8
+volume and K1/K2 ramps with the slow bit (bit 0: applied every 8th sample), ECOUNT, the four non-resonant
+4-pole filter modes, the ES5506 log volume law, live read-back of every register, and the filter field in CR bits 8-10 (see below).
+Register 0x48, 0x58-0x68, 0x74 and CR bit 10 changes are logged to `resonance_register_writes.csv`. Output is the dry stereo sum, unclamped; 2^19 is the full scale of the chip's 20-bit output.
+
+## phyzo_play: script-driven renders
+
+    build/phyzo_play --os <OS image> --wave <native image> --script <file> --out <dir> [--trace]
+
+Boots to "P 01", settles 1 s, then runs the script in 10 ms real-time steps. Script lines:
+`<ms> midi <hex...>`, `<ms> panel <hex...>`, `<ms> poke8|poke16|poke32 <addr> <value>`,
+`<ms> find <hex...>`, `<ms> rec <name>`, `<ms> stop`, `<ms> end`. Recordings are 32-bit float WAV
+(1.0 = 20-bit full scale). `summary.txt` lists peak/RMS, samples over the 20-bit range, the real-time factor
+and the level-5 IRQ count per recording. `--trace` adds `voice_writes.csv` and `resonance_register_writes.csv`.
+`phyzo_boot` / `phyzo_boot_trace` accept `--wave` as well.
+
+### Filter modes
+
+CR bits 8-10 select the filter: 0x000-0x300 the four ES5506 pole-pair modes (unchanged), 0x600 resonant LP,
+0x700 resonant BP, 0x500 bypass. Register 0x48 = A << 9 | B, two 9-bit shift-and-add codes
+((1 +/- 2^-u) * 2^-s; s = bits 0-3, u = bits 4-7, bit 8 = subtract). Resonant modes: input * A, then two
+state-variable (Chamberlin) sections in series on K1 and K2, both damped by B; LP outputs for 0x600, BP outputs for
+0x700. k = K/65536 at the same 12-bit precision as the pole-pair modes. States are sample << 4 and saturate at
++/-2^21 (the ES5506's 18-bit state width; assumed); `--state-limit <bits>` changes it. The model and its fit against
+recordings are documented in FILTER_REPORT.md (private data repo).
+
+phyzo_play prints per recording the resonant-mode samples and filter-state saturations.
+
+### filter_test (chip-level tests, no OS CPU)
+
+    build/filter_test --os <image> --wave <native image> --zone-start N --zone-len N --zone-pitch P [--key 36]
+                      (--sweep <dir> | --stress | --bench <cr filter bits hex> <index>) [--state-limit bits]
+
+Plays one looped zone (addresses are arguments, from your own zone list) through one voice, takes the resonance codes
+and cutoff values from the user's OS image at run time, and writes sweep WAVs (every mode; resonant modes at
+indices 0, 16, 32, 49, 50), a stability stress table (all indices, extreme and toggling K, maximum ramps) or a
+48-voice CPU benchmark. Build it against an older core with `-DFILTER_TEST_BASELINE` for before/after comparisons.
+
+## ESP2 core (src/esp2_core.*)
+
+Written from the public ESP2 documents: Part I Instruction and Hardware Specification (Andreas, Mauchly, Dattorro),
+the ESP2 Object Format Specification, and US patent 5,517,436. No microcode is contained here; the core runs whatever
+the OS loads through the host port.
+
+- Instruction memory 300 × 96 bits, 1,024 × 24-bit operand space with the SPR map of Part I section 11, host
+  interface per section 12 (HOST_CNTL bits, HOST_ESP_FACE on host bytes 0x1B-0x1D).
+- MAC (24×24, fixed normalising shift, 52-bit accumulator, MACZERO/MACP/MAC seeds, barrel shift, 48-bit saturation,
+  MACRL, MACH/MACL), ALU (32 ops, CCR/CMR, skip bits), delayed jumps, PC stack, REPT, BIOZ, AGEN (8 regions, modulo,
+  plus-one, BASE update), DIL/DOL, indirection with the patent's pointer latencies, magnitude truncation of written
+  data per HARD_CONF (MAG_TRUNC, TRUNC_WIDTH).
+- Per instruction the order is: memory access of the previous line, MAC/AGEN operand and seed fetch, previous ALU
+  result lands, ALU, MAC result, DIL load. This reproduces the latency rules of Part I section 1.3.
+- Execution is translated: each instruction is classified when the host writes it (pure NOPs, plain operands,
+  MAC seed/shift/latch behaviour, discarded results); `--esp2-ref` runs the reference interpreter instead.
+  `--esp2-checkpoint` restores the pre-spec SPR semantics of the v0.5 checkpoint.
+- Clock: 192 instruction cycles per 44.1 kHz period (Assumed; the OS-built image needs 188).
+
+Board wiring (derived from the OS's shell program): the voice chip's ten output channels are read by the ESP2 as
+external words at 0xC00000 + 2·channel (+1 = right), 20-bit values left-justified (Assumed); delay RAM 64K words at
+0x600000; SER0 (0x3EF/0x3EE) = audio input, SER1 (0x3ED/0x3EC) = stereo DAC.
+
+### phyzo_play additions
+
+`<name>_wet.wav` (DAC lines, 1.0 = 2^23) is written next to every dry recording; `clip_report.csv` lists clamps and
+saturations per recording by destination register. Options: `--esp2-stub`, `--esp2-ref`, `--esp2-checkpoint`,
+`--esp2-ips N`, `--audio-in file.wav` (16-bit or float, looped into SER0), `--profile` (host time split into 68k CPU
++ devices, voice core, ESP2). Script commands `display [label]` and `esp2reg <addr...>` log the panel display and
+ESP2 registers.
+
+### esp2_test (chip level, no OS CPU)
+
+    build/esp2_test --os <image> --list | --testsine out.wav | --bypass | --bench s
+    build/esp2_test --replay <esp2_commands.csv> [--seconds 10] [--ref] [--checkpoint] [--ips N] [--wav out.wav]
+
+`--replay` re-applies a recorded host command stream at its original times and then runs the loaded image with a
+deterministic signal on all ten voice channels: ESP2-alone speed and a DAC hash for A/B comparisons.
+
+### Audit instrumentation (v0.6)
+
+phyzo_play script commands: `esp2dump <name> [ram_start count]` (instruction memory, registers, RAM words with write
+epochs), `esp2stats <label>` (saturations, stale reads, region-bound violations, unmapped and external writes),
+`esp2epoch [lo hi]` (start a new write epoch; stale reads are counted inside the window). Options: `--trace-esp2`
+(ESP2 host commands only), `--esp2-ram-alias` (decode unmapped ESP2 addresses into RAM by their low 16 bits; default
+drops them). Every run writes `esp2_external_writes.csv` and lists CPU accesses outside the mapped devices; the clip
+report gives, per destination register, the count and the largest overshoot in 24-bit LSBs.
