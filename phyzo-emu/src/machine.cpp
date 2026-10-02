@@ -2,13 +2,43 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <mutex>
 #include "os_profile.h"
+#include "state_io.h"
 
 extern "C" {
 #include "m68k.h"
+unsigned long phyzo_cpu_state_size(void);
+void phyzo_cpu_save(void* dst);
+void phyzo_cpu_save_portable(void* dst);
+void phyzo_cpu_load(const void* src);
 }
 
 Machine* g_machine = nullptr;
+
+// Musashi has one global CPU. Several machines (plugin instances) take turns: whoever runs holds the lock, and the
+// CPU state of the previous owner is parked in that machine until it runs again.
+namespace {
+std::mutex g_cpuMutex;
+Machine* g_cpuOwner = nullptr;
+}
+
+struct CpuLock {
+    std::lock_guard<std::mutex> guard;
+    explicit CpuLock(Machine& m) : guard(g_cpuMutex) { m.becomeCpuOwner(); }
+};
+
+void Machine::becomeCpuOwner() {
+    if (g_cpuOwner != this) {
+        if (g_cpuOwner) {
+            g_cpuOwner->cpuState_.resize(phyzo_cpu_state_size());
+            phyzo_cpu_save(g_cpuOwner->cpuState_.data());
+        }
+        if (cpuState_.size() == phyzo_cpu_state_size()) phyzo_cpu_load(cpuState_.data());
+        g_cpuOwner = this;
+    }
+    g_machine = this;
+}
 
 namespace {
 inline uint32_t be(const uint8_t* p, int size) {
@@ -23,8 +53,13 @@ inline void putBe(uint8_t* p, uint32_t v, int size) {
 }
 }
 
-Machine::Machine() : flash_(kFlashSize, 0xff), ram_(kRamSize, 0) { g_machine = this; }
+Machine::Machine() : flash_(kFlashSize, 0xff), ram_(kRamSize, 0) {}
 Machine::~Machine() {
+    {
+        std::lock_guard<std::mutex> g(g_cpuMutex);
+        if (g_cpuOwner == this) g_cpuOwner = nullptr;
+        if (g_machine == this) g_machine = nullptr;
+    }
     if (voice.log) std::fclose(voice.log);
     if (voice.resonanceLog) std::fclose(voice.resonanceLog);
     if (esp2.log) std::fclose(esp2.log);
@@ -32,6 +67,7 @@ Machine::~Machine() {
 }
 
 bool Machine::init(const OsImage& os, const Config& cfg, std::string& err) {
+    CpuLock cpu(*this);
     cfg_ = cfg;
     // A3: flash 0x0-0xFFFFF erased (0xFF), A2: OS image at 0x4000 (read-only).
     std::fill(flash_.begin(), flash_.end(), 0xff);
@@ -179,6 +215,7 @@ void Machine::advanceDevices() {
 uint64_t Machine::nextEvent() const { return std::min({timer1.nextEvent(), serial.nextEvent(), nextSample_}); }
 
 Machine::Stop Machine::runUntil(uint64_t limit, const std::function<bool()>& pred) {
+    CpuLock cpu(*this);
     auto t0 = std::chrono::steady_clock::now();
     Stop result = Stop::TimeLimit;
     const uint64_t window = cyclesFromMs(cfg_.stallWindowMs);
@@ -365,4 +402,75 @@ void Machine::instrHook(uint32_t pc) {
                 if (!seen) checkpointHits.emplace_back(pc, now());
             }
     }
+}
+
+// ------------------------------------------------------------------ state (plugin projects)
+
+namespace {
+constexpr uint32_t kStateVersion = 1;
+}
+
+std::vector<uint8_t> Machine::saveState() {
+    CpuLock cpu(*this);
+    StateWriter w;
+    w.raw("PHZM", 4);
+    w.put(kStateVersion);
+    w.section("MACH", [&](StateWriter& s) {
+        s.put(cfg_.cpuHz); s.put(cfg_.esp2InstrPerSample); s.put(cfg_.esp2Stub);
+        s.put(cycles_); s.put(voiceSamples_); s.put(nextSample_); s.put(irqLevel_);
+        s.put(windowStart_); s.put(windowSamples_); s.put(windowAtBra_); s.put(windowBraPc_);
+        s.put(audioInPos); s.put(voicePortClips); s.put(flashWrites); s.put(irqTaken); s.put(spuriousAcks);
+        s.vec(ram_);
+    });
+    w.section("CPU ", [&](StateWriter& s) {
+        std::vector<uint8_t> c(phyzo_cpu_state_size());
+        phyzo_cpu_save_portable(c.data());
+        s.vec(c);
+    });
+    w.section("TIM1", [&](StateWriter& s) { timer1.save(s); });
+    w.section("SER ", [&](StateWriter& s) { serial.save(s); });
+    w.section("DMA1", [&](StateWriter& s) { dma1.save(s); });
+    w.section("VOIC", [&](StateWriter& s) { voice.save(s); });
+    w.section("ESP2", [&](StateWriter& s) { esp2.save(s); });
+    w.section("PANL", [&](StateWriter& s) { panel.save(s); });
+    return std::move(w.bytes);
+}
+
+bool Machine::loadState(const std::vector<uint8_t>& data, std::string& err) {
+    CpuLock cpu(*this);
+    StateReader r(data.data(), data.size());
+    char magic[4] = {};
+    r.raw(magic, 4);
+    if (!r.ok() || std::memcmp(magic, "PHZM", 4) != 0) { err = "not a machine state"; return false; }
+    if (r.get<uint32_t>() != kStateVersion) { err = "machine state from another version"; return false; }
+    if (cfg_.esp2Stub) { err = "machine state needs the ESP2 core"; return false; }
+    std::string tag; StateReader s(nullptr, 0);
+    int seen = 0;
+    while (r.nextSection(tag, s)) {
+        if (tag == "MACH") {
+            double hz = 0; int ips = 0; bool stub = true;
+            s.get(hz); s.get(ips); s.get(stub);
+            if (hz != cfg_.cpuHz || ips != cfg_.esp2InstrPerSample || stub) { err = "machine state from another configuration"; return false; }
+            s.get(cycles_); s.get(voiceSamples_); s.get(nextSample_); s.get(irqLevel_);
+            s.get(windowStart_); s.get(windowSamples_); s.get(windowAtBra_); s.get(windowBraPc_);
+            s.get(audioInPos); s.get(voicePortClips); s.get(flashWrites); s.get(irqTaken); s.get(spuriousAcks);
+            s.vecExact(ram_, kRamSize);
+        } else if (tag == "CPU ") {
+            std::vector<uint8_t> c;
+            s.vec(c);
+            if (c.size() != phyzo_cpu_state_size()) { err = "CPU state from another core version"; return false; }
+            phyzo_cpu_load(c.data());
+        } else if (tag == "TIM1") timer1.load(s);
+        else if (tag == "SER ") serial.load(s);
+        else if (tag == "DMA1") dma1.load(s);
+        else if (tag == "VOIC") voice.load(s);
+        else if (tag == "ESP2") esp2.load(s);
+        else if (tag == "PANL") panel.load(s);
+        else continue;                                           // unknown section from a later version
+        if (!s.ok()) { err = "machine state section " + tag + " is damaged"; return false; }
+        ++seen;
+    }
+    if (!r.ok() || seen < 8) { err = "machine state is incomplete"; return false; }
+    sliceStart_ = cycles_;
+    return true;
 }

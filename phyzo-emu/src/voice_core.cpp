@@ -275,3 +275,19 @@ void VoiceCore::tick(int32_t &left, int32_t &right) {
     if (l >= lim || l < -lim || r >= lim || r < -lim) ++overRange;
     left = l; right = r;
 }
+
+// ---------------------------------------------------------------- state (plugin projects)
+#include <type_traits>
+#include "state_io.h"
+
+void VoiceCore::save(StateWriter& w) const {
+    static_assert(std::is_trivially_copyable<Voice>::value, "voice state is copied as plain data");
+    w.put(uint32_t(sizeof(Voice))); w.put(uint32_t(v.size()));
+    w.raw(v.data(), sizeof(Voice) * v.size());
+    w.put(chan); w.put(irqv_); w.put(actv); w.put(mode); w.put(pageSel); w.put(stateLimit); w.put(processAudio);
+}
+void VoiceCore::load(StateReader& r) {
+    if (r.get<uint32_t>() != sizeof(Voice) || r.get<uint32_t>() != v.size()) { r.fail(); return; }
+    r.raw(v.data(), sizeof(Voice) * v.size());
+    r.get(chan); r.get(irqv_); r.get(actv); r.get(mode); r.get(pageSel); r.get(stateLimit); r.get(processAudio);
+}

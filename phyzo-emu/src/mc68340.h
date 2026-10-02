@@ -7,6 +7,9 @@
 #include <string>
 #include <vector>
 
+class StateWriter;
+class StateReader;
+
 constexpr uint64_t kNever = ~uint64_t(0);
 
 // Services the machine provides to the modules.
@@ -29,6 +32,8 @@ public:
     void advance(uint64_t now);
     uint64_t nextEvent() const { return on ? nextZero : kNever; }
     int irqLevel() const;
+    void save(StateWriter& w) const;
+    void load(StateReader& r);
     uint8_t vector() const { return ir & 0xff; }
 
     uint16_t mcr = 0, ir = 0, cr = 0, sr = 0, prel1 = 0xffff, prel2 = 0xffff, com = 0;
@@ -71,6 +76,8 @@ public:
     uint8_t vector() const { return ivr; }
     uint8_t isr() const;
     void queueRx(int ch, const std::vector<uint8_t>& bytes, uint64_t earliest);
+    void save(StateWriter& w) const;
+    void load(StateReader& r);
     bool rxIdle(int ch) const { return ch_[ch].pending.empty() && ch_[ch].fifo.empty(); }
 
     SerialChannel ch_[2];
@@ -91,6 +98,8 @@ public:
     explicit Dma(ModuleHost& h) : host(h) {}
     uint8_t read8(uint32_t off);
     void write8(uint32_t off, uint8_t v);
+    void save(StateWriter& w) const;
+    void load(StateReader& r);
 
     uint16_t mcr = 0, intr = 0, ccr = 0;
     uint8_t csr = 0, fcr = 0;

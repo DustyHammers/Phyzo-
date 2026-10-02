@@ -46,6 +46,7 @@ add_custom_command(
   VERBATIM)
 
 set(MUSASHI_SOURCES
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/musashi_state.c"
   "${MUSASHI_DIR}/m68kcpu.c"
   "${MUSASHI_DIR}/m68kdasm.c"
   "${MUSASHI_DIR}/softfloat/softfloat.c"
@@ -63,7 +64,17 @@ foreach(variant fast trace)
     target_compile_definitions(musashi_${variant} PRIVATE HARNESS_TRACE=1)
   endif()
   target_link_libraries(musashi_${variant} PUBLIC m)
+  set_target_properties(musashi_${variant} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endforeach()
+
+# The emulator as a library (fast core): used by the plugin and the tests.
+add_library(phyzo_core STATIC
+  src/machine.cpp src/mc68340.cpp src/esp2_stub.cpp src/esp2_core.cpp src/voice_core.cpp src/panel_model.cpp
+  src/os_image.cpp src/rom_id.cpp src/musashi_glue.cpp)
+target_include_directories(phyzo_core PUBLIC src)
+target_link_libraries(phyzo_core PUBLIC musashi_fast)
+target_compile_options(phyzo_core PRIVATE -Wall -Wextra)
+set_target_properties(phyzo_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 set(HARNESS_SOURCES
   src/machine.cpp

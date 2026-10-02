@@ -23,6 +23,9 @@ struct DisplayChange {
     uint8_t dots;
 };
 
+class StateWriter;
+class StateReader;
+
 class PanelModel {
 public:
     // fontTable: 128 bytes (ASCII -> segments) read from the user's OS image.
@@ -32,6 +35,7 @@ public:
     uint64_t cyclesPerMs = 16000;
 
     // configuration
+    bool keepLog = true;         // false: no transcript or display history (the plugin runs for hours)
     bool replyHello = true;
     double helloDelayMs = 2.0;
     int replyF2 = -1;            // >= 0: answer F2 with "F2 xx"
@@ -42,6 +46,12 @@ public:
     void inject(const std::vector<uint8_t>& bytes, uint64_t cycle, const std::string& note);
 
     std::string text() const { return text_; }
+    const std::array<uint8_t, 4>& rawDigits() const { return raw_; }
+    uint8_t dots() const { return dots_; }
+
+    // Panel state (display, LEDs, message parser). Configuration and logs are not included.
+    void save(StateWriter& w) const;
+    void load(StateReader& r);
     std::vector<PanelEvent> transcript;
     std::vector<DisplayChange> displayHistory;
     std::map<uint8_t, int> ledState;     // LED code -> 0 off, 1 on, 2 flashing
@@ -50,6 +60,8 @@ public:
 
 private:
     void complete();
+    void log(PanelEvent e);
+    void history(DisplayChange d);
     std::string decodeSeg(uint8_t s) const;
     int expectedData(uint8_t status) const;
 

@@ -17,6 +17,9 @@
 #include <string>
 #include <vector>
 
+class StateWriter;
+class StateReader;
+
 class VoiceCore {
 public:
     static constexpr int kVoices = 48;
@@ -35,6 +38,10 @@ public:
     // one output sample (dry stereo; 2^19 = full scale of the ES5506's 20-bit output, not clamped)
     void tick(int32_t &left, int32_t &right);
     bool irqLine() const { return !(irqv_ & 0x80); }
+
+    // Chip state (registers, voices, filter states, IRQ latch). Wave memory is not included: it comes from the ROM.
+    void save(StateWriter& w) const;
+    void load(StateReader& r);
 
     // logs and statistics
     FILE *log = nullptr;         // every register write (t_ms,pc,page,reg,size,value)
