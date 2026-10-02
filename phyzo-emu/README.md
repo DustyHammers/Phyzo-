@@ -32,7 +32,7 @@ left null, so the OS skips saves.
 ## Build
 
 ```sh
-git clone https://github.com/kstenerud/Musashi work/deps/Musashi
+../scripts/fetch_deps.sh musashi          # Musashi at the pinned commit (scripts/deps.env) into ../work/deps
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```

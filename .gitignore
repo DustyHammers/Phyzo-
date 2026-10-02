@@ -23,3 +23,7 @@ roms/
 .DS_Store
 .vscode/
 .idea/
+
+# CI caches and packages
+.ccache/
+dist/

@@ -11,6 +11,10 @@ recordings or renders (checked: no data files, nothing over 200 KB, no embedded 
 | `tools/rombuilder/docs/NATIVE_IMAGE.md` | How the native wave image is built from the OS tables | — |
 | `tools/esp2obj_parser.py` | Parser for ESP2 effect-program objects (format logic from the public spec) | — |
 | `tools/analysis/filter_fit/`, `tools/analysis/filter_validation/` | Resonant-filter fitting and held-out validation scripts | — |
+| `plugin/` | JUCE plugin (VST3 + AU) with the fixed identity; placeholder until Phase 3 wraps the emulator | 0.2.0 |
+| `scripts/` | Pinned dependencies and fetch script, data-file guard, plugin identity check | — |
+| `.github/workflows/ci.yml` | CI: data guard, ROM-free tests (Linux), macOS plugin build | — |
+| `docs/INSTALL_MAC.md` | Downloading a build and installing it on the Mac | — |
 
 Runtime: the plugin and tools load the two ROM files from the user's machine (see the private repo's `ROMs/`).
 

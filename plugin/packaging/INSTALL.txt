@@ -1,0 +1,27 @@
+Phyzo for macOS (Apple Silicon): installing
+===========================================
+
+The full step-by-step guide is docs/INSTALL_MAC.md in the repository.
+
+1. Quit REAPER.
+
+2. Copy the plugins (replace older copies if asked):
+     Phyzo.vst3       ->  ~/Library/Audio/Plug-Ins/VST3/        (or /Library/Audio/Plug-Ins/VST3/)
+     Phyzo.component  ->  ~/Library/Audio/Plug-Ins/Components/  (or /Library/Audio/Plug-Ins/Components/)
+   In Finder: menu Go > Go to Folder..., paste the folder path, press Return.
+   Create the VST3 or Components folder if it does not exist.
+
+3. Clear the macOS quarantine flag. In Terminal type the following, ending with a space (no Return yet):
+
+     sudo xattr -r -d com.apple.quarantine 
+
+   then drag Phyzo.vst3 from Finder onto the Terminal window and press Return (password if asked).
+   Repeat for Phyzo.component. No message means it worked.
+
+4. AU only: let macOS re-read its Audio Unit list (paste in Terminal, press Return):
+
+     killall -9 AudioComponentRegistrar
+
+5. Start REAPER. If Phyzo is not listed, open Preferences > Plug-ins > VST and click "Re-scan".
+
+The plugin is ad-hoc signed (not notarised by Apple). That is why step 3 is needed.
