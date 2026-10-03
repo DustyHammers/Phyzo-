@@ -5,6 +5,7 @@
 #include "skin_view.h"
 
 namespace {
+constexpr int Meter_kParts = PhyzoProcessor::Meter::kParts;
 // Built-in skin colours (approved mockup).
 const juce::Colour kPurple(0xff593159), kHeader(0xff46264a), kRed(0xffff3020), kGhost(0xff1d0706), kWindow(0xff120509);
 
@@ -223,6 +224,13 @@ void BuiltinView::paintDebug(juce::Graphics& g, int y) {
                    juce::String(proc.engine().maxLockWaitUs() / 1000.0, 2) + " ms" + dot + "state requests " +
                    juce::String(juce::int64(m.stateRequests.load())),
                20, y + 68, kWidth - 30, 16, juce::Justification::centredLeft);
+    // Per part: average / peak share of the block budget over the last second.
+    static const char* const names[Meter_kParts] = {"68k+dev", "voice", "ESP2", "rate", "queue"};
+    juce::String parts = "% avg/peak:";
+    for (int i = 0; i < Meter_kParts; ++i)
+        parts << " " << names[i] << " " << juce::String(m.partAvg[size_t(i)].load() * 100, 1) << "/"
+              << juce::String(m.partPeak[size_t(i)].load() * 100, 1) << (i + 1 < Meter_kParts ? dot.trimEnd() : juce::String());
+    g.drawText(parts, 20, y + 84, kWidth - 30, 16, juce::Justification::centredLeft);
 }
 
 // ================================================================== editor

@@ -111,7 +111,10 @@ The **Built-in** skin shows:
   length, the last block's processing time, and **overruns** (blocks that took longer than their real-time budget;
   any overrun can be heard as a dropout). The third line: the **worst block** time and the longest **audio lock
   wait** since playback started, and how many times the host asked for the plugin's **state** (REAPER does this
-  after clicks in a plugin window). These reset when the host restarts audio.
+  after clicks in a plugin window). These reset when the host restarts audio. The fourth line splits the CPU use per block by part, as
+  average/peak percent of the block's real-time budget over the last second: **68k+dev** (the synth's CPU running its
+  OS, with timers, serial ports and DMA), **voice** (voice chip), **ESP2** (effects chip), **rate** (conversion from
+  44.1 kHz to the host rate) and **queue** (passing knob, button and MIDI events to the synth).
 
 Play Phyzo from a MIDI track. Everything the synth does (including the selected preset, any edits made over
 MIDI and the knob positions) is saved with the REAPER project and restored when you open it.

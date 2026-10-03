@@ -200,3 +200,13 @@ period, at 512 and 128 samples and 44.1 and 48 kHz, while another thread sweeps 
 button every 50 ms and asks for the state every 100 ms. Prints mean, 99.9th percentile and worst block time,
 overruns and the longest wait for the engine lock. On a shared machine the worst block also shows the machine's own
 scheduling noise; the lock wait is the part the engine controls.
+
+## speed_bench: component cost without ROMs
+
+    build/speed_bench            # all parts
+    build/speed_bench effect     # only the ESP2 core on the effect-like program
+
+Host milliseconds per second of 44.1 kHz audio (1000 = one core in real time) for: the ESP2 core on an effect-like
+program and on a busy random program (fast path and reference interpreter, with output hashes that must not change
+with speed work), the voice chip with 32 voices, and the 68k with the machine. In the plugin, the debug overlay shows
+the same split measured on the real OS and presets.

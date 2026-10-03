@@ -58,6 +58,10 @@ public:
         std::atomic<uint64_t> overruns{0};
         std::atomic<float> worstMs{0};               // longest block since the last prepare (or reset)
         std::atomic<uint64_t> stateRequests{0};      // host requests for the plugin state
+        // Per part, share of the block's real-time budget over the last second: average and the worst block.
+        // 0 68k + devices, 1 voice chip, 2 ESP2, 3 rate conversion, 4 UI-to-audio queue.
+        static constexpr int kParts = 5;
+        std::array<std::atomic<float>, kParts> partAvg{}, partPeak{};
         std::array<std::atomic<float>, 8> history{}; // one value per second, oldest first after `head`
         std::atomic<uint32_t> head{0};
     } meter;
@@ -101,6 +105,7 @@ private:
     std::vector<Engine::MidiEvent> events_;
     // meter accumulation (audio thread only)
     double winTime_ = 0, winBudget_ = 0, winPeak_ = 0;
+    std::array<double, Meter::kParts> winPart_{}, winPartPeak_{};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PhyzoProcessor)
 };

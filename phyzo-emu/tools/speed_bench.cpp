@@ -209,7 +209,7 @@ int main(int argc, char** argv) {
         }
         int64_t acc = 0;
         const auto t0 = Clock::now();
-        for (int s = 0; s < 44100; ++s) { int32_t l, r; k.c.tick(l, r); acc += l ^ r; }
+        for (int s = 0; s < 44100; ++s) { int32_t l, r; k.c.tick(l, r); acc += l + 3 * int64_t(r); }
         std::printf("Voice chip, 32 voices:                    %8.1f ms per second   [%lld]\n", msSince(t0), (long long)acc);
     }
     {   // 68k: busy loop

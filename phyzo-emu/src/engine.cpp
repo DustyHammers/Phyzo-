@@ -346,6 +346,10 @@ void Engine::process(float* left, float* right, int n, const MidiEvent* events, 
         hostPos_ = 0;
         retime_ = false;
     }
+    using Clock = std::chrono::steady_clock;
+    const bool prof = profiling_.load(std::memory_order_relaxed);
+    m.profile = prof;
+    const auto tq0 = Clock::now();
     drainButtons(m);
     sendControls(m);
 
@@ -358,6 +362,9 @@ void Engine::process(float* left, float* right, int n, const MidiEvent* events, 
         midiTimes_[midiCount_++ % midiTimes_.size()] = at;
         m.serial.queueRx(1, std::vector<uint8_t>(events[i].data, events[i].data + events[i].size), at);
     }
+
+    const auto tq1 = Clock::now();
+    const double host0 = m.hostSeconds, voice0 = m.profVoice, esp20 = m.profEsp2;
 
     // Run the machine until the converter has the input it needs for this block.
     const int64_t need = resampler_.inputNeeded(n);
@@ -379,6 +386,7 @@ void Engine::process(float* left, float* right, int n, const MidiEvent* events, 
             return;
         }
     }
+    const auto tr0 = Clock::now();
     const size_t got = m.wet.size() / 2;
     if (inL_.size() < got) { inL_.resize(got); inR_.resize(got); }
     for (size_t i = 0; i < got; ++i) {
@@ -388,6 +396,16 @@ void Engine::process(float* left, float* right, int n, const MidiEvent* events, 
     resampler_.push(inL_.data(), inR_.data(), int(got));
     m.wet.clear(); m.audio.clear(); m.midiOut.clear();
     resampler_.produce(left, right, n);
+    if (prof) {
+        const double secs = [](Clock::duration d) { return std::chrono::duration<double>(d).count(); }(Clock::now() - tr0);
+        times_.resample = secs;
+        times_.queue = std::chrono::duration<double>(tq1 - tq0).count();
+        times_.voice = m.profVoice - voice0;
+        times_.esp2 = m.profEsp2 - esp20;
+        times_.cpu = std::max(0.0, (m.hostSeconds - host0) - times_.voice - times_.esp2);
+    } else {
+        times_ = BlockTimes();
+    }
     hostPos_ += n;
     publishDisplay(m);
     serveSnapshot(m);
