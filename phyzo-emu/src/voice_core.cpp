@@ -236,6 +236,10 @@ void VoiceCore::checkEndReverse(Voice &vc) {
     }
 }
 
+// A-17: 48-voice OTTO-48 output headroom, Derived (factory demos clean, 17 of 19 ceiling presets resolved); confirm
+// with an owner recording.
+constexpr int kVolumeShift = 12;
+
 void VoiceCore::tick(int32_t &left, int32_t &right) {
     if (!tablesReady_) {   // 4-bit exponent, 8-bit mantissa log volume (ES5506)
         for (int i = 0; i < 4096; ++i) volTable_[i] = (((i & 0xFF) | 0x100) << 7) >> (16 - (i >> 8));
@@ -257,8 +261,8 @@ void VoiceCore::tick(int32_t &left, int32_t &right) {
             if (processAudio) filter(vc, s);
             if (vc.ecount) envelopes(vc);
             if (processAudio) {
-                int32_t vl = int32_t((int64_t(s) * volTable_[(vc.lvol >> 12) & 0xFFF]) >> 11);
-                int32_t vr = int32_t((int64_t(s) * volTable_[(vc.rvol >> 12) & 0xFFF]) >> 11);
+                int32_t vl = int32_t((int64_t(s) * volTable_[(vc.lvol >> 12) & 0xFFF]) >> kVolumeShift);
+                int32_t vr = int32_t((int64_t(s) * volTable_[(vc.rvol >> 12) & 0xFFF]) >> kVolumeShift);
                 l += vl; r += vr;
                 uint32_t ch = (vc.cr >> 12) & 0xF;          // output channel (native: CR bits 12-15)
                 if (ch < uint32_t(kChannels)) { chan[ch][0] += vl; chan[ch][1] += vr; } else ++badChannel;
