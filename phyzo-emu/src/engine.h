@@ -39,6 +39,15 @@ public:
     // the panel answers to the OS's F4 request when a machine boots.
     void setControl(int cc, int raw);
     int controlPosition(int cc) const { return cc >= 0 && cc < 26 ? positions_[size_t(cc)].load() : 0; }
+    // A front-panel button by its panel id (raw): sends 81 raw (down) or 80 raw (up). Lock-free for the audio thread.
+    void pressRaw(int raw, bool down);
+
+    // LEDs as the OS last set them (panel messages 90 off, 91 on, 92 flash, 9D beat flash).
+    enum LedMode : uint8_t { LedOff = 0, LedOn = 1, LedFlash = 2, LedBeat = 3 };
+    struct LedInfo { LedMode mode; uint32_t beats; float beatIntervalMs; };   // beats: count of 9D messages so far
+    LedInfo led(int code) const;
+    // The display's segment bytes, leftmost digit (panel message 96) first.
+    std::array<uint8_t, 4> segments() const;
 
     // Call regularly on the message thread: restarts the machine after the OS asked for a reboot.
     void service();
@@ -75,6 +84,8 @@ private:
     void drainButtons(Machine& m);
     void publishPositions(const Machine& m);
     void push(uint32_t entry);
+    void attachLeds(Machine& m);
+    void publishLeds(const Machine& m);
 
     // ROMs (message thread)
     std::string osPath_, wavePath_, osMd5_, waveMd5_;
@@ -104,13 +115,18 @@ private:
     std::atomic<bool> rebootRequested_{false};
     std::atomic<int> latency_{0};
     std::atomic<uint32_t> chars_{0x20202020};
+    std::atomic<uint32_t> segs_{0};
+    std::array<std::atomic<uint8_t>, 256> ledMode_{};
+    std::array<std::atomic<uint32_t>, 256> beats_{};
+    std::array<std::atomic<float>, 256> beatIntervalMs_{};
     std::atomic<uint32_t> dots_{0};
     mutable std::mutex msgMtx_;
     std::string message_;
 
-    // panel buttons: single-producer ring (UI) -> audio thread
+    // panel buttons and controls: ring (UI threads) -> audio thread
     static constexpr int kButtonRing = 64;
     std::array<std::atomic<uint32_t>, kButtonRing> buttons_{};   // (kind << 24) | payload
+    std::mutex pushMtx_;                                         // producers: message thread and skin render thread
     std::array<std::atomic<uint16_t>, 26> positions_{};          // current control positions (for the UI)
     std::mutex controlsMtx_;
     std::array<uint16_t, 26> controls_{};                          // positions for the next cold boot

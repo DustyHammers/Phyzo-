@@ -35,9 +35,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: work/deps
-          key: deps-linux-musashi-${{ hashFiles('scripts/deps.env') }}
-      - name: Fetch Musashi (pinned)
-        run: scripts/fetch_deps.sh musashi
+          key: deps-linux-${{ hashFiles('scripts/deps.env') }}
+      - name: Fetch Musashi, RmlUi, Lua and FreeType (pinned)
+        run: scripts/fetch_deps.sh musashi rmlui lua freetype
       - name: Build emulator
         run: |
           cmake -S phyzo-emu -B build/emu -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -50,6 +50,12 @@ jobs:
           cmake --build build/rombuilder
       - name: Rombuilder tests
         run: ctest --test-dir build/rombuilder --output-on-failure
+      - name: Build skin runtime (RmlUi + Lua)
+        run: |
+          cmake -S plugin/skin -B build/skin -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/skin
+      - name: Skin runtime tests (text-only test skin)
+        run: ctest --test-dir build/skin --output-on-failure
 
   macos-plugin:
     name: macOS plugin (VST3 + AU, Apple Silicon)
@@ -74,7 +80,7 @@ jobs:
           path: .ccache
           key: ccache-macos-${{ hashFiles('scripts/deps.env') }}-${{ github.sha }}
           restore-keys: ccache-macos-${{ hashFiles('scripts/deps.env') }}-
-      - name: Fetch Musashi and JUCE (pinned)
+      - name: Fetch Musashi, JUCE, RmlUi, Lua and FreeType (pinned)
         run: scripts/fetch_deps.sh
       - name: Emulator tests on macOS
         run: |

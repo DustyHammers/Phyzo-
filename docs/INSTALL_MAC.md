@@ -12,7 +12,7 @@ You must be signed in to GitHub to download builds.
 3. Click the newest run with a green tick for the branch you want: `main` for merged work, or the pull request
    you are testing (its title is shown on the run).
 4. On the run's page, scroll down to **Artifacts** and click the file named like
-   `Phyzo-0.2.0-macOS-1a2b3c4.zip`. The last part is the commit it was built from.
+   `Phyzo-0.4.0-macOS-1a2b3c4.zip`. The last part is the commit it was built from.
 
 From a pull request page you can also get there with the **Checks** tab, then **CI** on the left, then **Summary**.
 
@@ -76,18 +76,41 @@ the native wave image into it. File names do not matter: each file is recognised
 missing, the plugin window says which one and checks the folder again every two seconds, so the synth starts by
 itself a moment after you copy the files in; there is no need to reload the plugin.
 
-## 7. The plugin window (temporary, until the panel skin)
+## 7. Skins
 
-- The synth's 4-character display. While the synth boots it shows what the OS writes; then the preset (e.g. `P 01`).
-- **◀ −** and **+ ▶** press the synth's own −/No and +/Yes buttons: on the preset display they step to the previous
-  or next preset. Holding one repeats, as on the hardware.
-- ROM status and engine status: running, with the host sample rate, or a plain-language message if something stopped.
+The plugin window shows a **skin**. Your skins live in **Documents > Phyzo > skins**, one folder per skin: the
+folder `rack` with `rack.rml` in it is the skin "rack" (with its .rcss, .lua, images and fonts). The compiled-in skin
+**Built-in** is always available. Phyzo starts with "rack" if it is there, otherwise with Built-in.
+
+Right-click anywhere in the window for the menu (the same in every skin):
+
+- **Skin**: Built-in, then every skin in your skins folder (the current one is ticked).
+- **Reload skin** (or press **F5** with the window focused): reads the skin again from disk after you edit it.
+- **Zoom**: 75, 100, 125, 150 or 200 %.
+- **Developer > RmlUi debugger**: RmlUi's inspector, for working on a skin.
+
+Skin and zoom are global settings: they apply to every Phyzo window and project, and are not saved in projects.
+If the chosen skin is missing or cannot be loaded, Phyzo shows "rack" instead (then Built-in) with a message saying
+why. Skin messages and script errors are written to `~/Documents/Phyzo/skin-log.txt`. How to write a skin:
+`docs/SKINS.md` in the repository.
+
+In a skin: drag a knob up or down (hold Shift for fine steps) or use the mouse wheel; click a button to press it;
+**Alt/Option-click** a button to latch it held until you click it again; **Esc** releases all latched buttons.
+Right-click never presses anything. Knob positions are part of the synth's panel and are saved with the project.
+
+The **Built-in** skin shows:
+
+- The synth's 4-character display, drawn from the OS's segment data.
+- **◀ −** and **+ ▶**: the synth's own −/No and +/Yes buttons; on the preset display they step to the previous or
+  next preset. Holding one repeats, as on the hardware.
+- **Status**: running, with the host sample rate, or a plain-language message if something stopped. While a ROM
+  file is missing (or has the wrong checksum) it says which one and where to put it.
 - **Debug**: CPU use per audio block (average and peak over the last second, one bar per second), the block size and
   length, the last block's processing time, and **overruns** (blocks that took longer than their real-time budget;
   any overrun can be heard as a dropout).
 
-Play Phyzo from a MIDI track. Everything the synth does (including the selected preset and any edits made over
-MIDI) is saved with the REAPER project and restored when you open it.
+Play Phyzo from a MIDI track. Everything the synth does (including the selected preset, any edits made over
+MIDI and the knob positions) is saved with the REAPER project and restored when you open it.
 
 ## Uninstalling
 

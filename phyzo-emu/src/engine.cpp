@@ -74,6 +74,7 @@ void Engine::setState(const std::vector<uint8_t>& blob) {
 }
 
 void Engine::push(uint32_t entry) {
+    std::lock_guard<std::mutex> lk(pushMtx_);
     const uint32_t head = btnHead_.load(std::memory_order_relaxed);
     if (head - btnTail_.load(std::memory_order_acquire) >= uint32_t(kButtonRing)) return;   // full: drop
     buttons_[head % kButtonRing].store(entry, std::memory_order_relaxed);
@@ -81,6 +82,52 @@ void Engine::push(uint32_t entry) {
 }
 
 void Engine::pressButton(int osButton, bool down) { push(uint32_t((osButton << 1) | (down ? 1 : 0))); }
+
+void Engine::pressRaw(int raw, bool down) {
+    if (raw < 0 || raw > 0x7F) return;
+    push((2u << 24) | (down ? 0x100u : 0u) | uint32_t(raw));
+}
+
+Engine::LedInfo Engine::led(int code) const {
+    if (code < 0 || code > 255) return {LedOff, 0, 0};
+    const size_t c = size_t(code);
+    return {LedMode(ledMode_[c].load()), beats_[c].load(), beatIntervalMs_[c].load()};
+}
+
+std::array<uint8_t, 4> Engine::segments() const {
+    const uint32_t v = segs_.load();
+    return {uint8_t(v >> 24), uint8_t(v >> 16), uint8_t(v >> 8), uint8_t(v)};
+}
+
+// LED messages from the machine's panel (worker thread while booting, then the audio thread).
+void Engine::attachLeds(Machine& m) {
+    auto lastBeat = std::make_shared<std::array<double, 256>>();
+    lastBeat->fill(-1);
+    const double msPerCycle = 1000.0 / m.config().cpuHz;
+    m.panel.onLed = [this, lastBeat, msPerCycle](uint8_t st, uint8_t code, uint8_t, uint64_t cycle) {
+        if (st == 0x9d) {
+            const double now = double(cycle) * msPerCycle;
+            double& prev = (*lastBeat)[code];
+            beatIntervalMs_[code] = prev >= 0 ? float(now - prev) : 0.0f;
+            prev = now;
+            ledMode_[code] = LedBeat;
+            beats_[code] = beats_[code].load() + 1;
+        } else if (st >= 0x90 && st <= 0x92) {
+            ledMode_[code] = uint8_t(st - 0x90);
+        }
+    };
+}
+
+// After a restore the LEDs come from the saved panel state (a beat-flashing LED stays a beat LED if it was one).
+void Engine::publishLeds(const Machine& m) {
+    for (int c = 0; c < 256; ++c) {
+        auto it = m.panel.ledState.find(uint8_t(c));
+        const int s = it == m.panel.ledState.end() ? 0 : it->second;
+        const uint8_t cur = ledMode_[size_t(c)].load();
+        if (s == 2 && cur == LedBeat) continue;
+        ledMode_[size_t(c)] = uint8_t(s >= 0 && s <= 2 ? s : 0);
+    }
+}
 
 void Engine::setControl(int cc, int raw) {
     if (cc < 0 || cc >= 26) return;
@@ -134,6 +181,7 @@ void Engine::runJob(std::string osPath, std::string wavePath, std::vector<uint8_
         Machine::Config cfg;
         if (!m->init(os, cfg, err) || !m->loadWaveMemory(wavePath, err)) return false;
         m->panel.keepLog = false;
+        attachLeds(*m);
         { std::lock_guard<std::mutex> lk(controlsMtx_); m->panel.controls = controls_; }   // answered to the OS's F4
         m->captureAudio = true;
         m->audio.reserve(1 << 16); m->wet.reserve(1 << 16);
@@ -186,6 +234,7 @@ void Engine::install(std::unique_ptr<Machine> m, uint64_t generation, uint8_t ra
         live_.swap(m);
         rawPlus_ = rawPlus; rawMinus_ = rawMinus;
         publishPositions(*live_);
+        publishLeds(*live_);
         { std::lock_guard<std::mutex> lc(controlsMtx_); controls_ = live_->panel.controls; }   // a restored state's knobs
         retime_ = true;
         state_ = State::Running;
@@ -199,6 +248,8 @@ void Engine::publishDisplay(Machine& m) {
     for (int i = 0; i < 4; ++i) c = (c << 8) | uint8_t(i < int(t.size()) ? t[size_t(i)] : ' ');
     chars_ = c;
     dots_ = m.panel.dots();
+    const auto& r = m.panel.rawDigits();
+    segs_ = uint32_t(r[0]) << 24 | uint32_t(r[1]) << 16 | uint32_t(r[2]) << 8 | r[3];
 }
 
 // ------------------------------------------------------------------ audio thread
@@ -223,6 +274,10 @@ void Engine::drainButtons(Machine& m) {
             const int cc = int((v >> 10) & 0x1F);
             m.panel.moveControl(cc, int(v & 0x3FF), m.cycles());
             if (cc < 26) positions_[size_t(cc)] = m.panel.controls[size_t(cc)];
+            continue;
+        }
+        if ((v >> 24) == 2) {
+            m.panel.inject({uint8_t((v & 0x100) ? 0x81 : 0x80), uint8_t(v & 0x7F)}, m.cycles(), std::string());
             continue;
         }
         const uint8_t raw = ((v >> 1) & 0xFF) == 1 ? rawPlus_ : rawMinus_;

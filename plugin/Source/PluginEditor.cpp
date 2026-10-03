@@ -1,214 +1,329 @@
 #include "PluginEditor.h"
+#include "RmlSkinComponent.h"
+#include "SkinSettings.h"
+#include "skin_discovery.h"
+#include "skin_view.h"
 
 namespace {
-const juce::Colour kBg(0xff1e1f22), kPanel(0xff2a2c30), kLine(0xff3a3d42), kText(0xffd8d8d8), kDim(0xff8a8f98);
-const juce::Colour kLedBg(0xff0a140c), kLed(0xff5dff6a), kLedOff(0xff1d3a22), kOk(0xff5dd16a), kBad(0xffe0605a);
-constexpr int kW = 520, kH = 330, kDebugY = 262;
+// Built-in skin colours (approved mockup).
+const juce::Colour kPurple(0xff593159), kHeader(0xff46264a), kRed(0xffff3020), kGhost(0xff1d0706), kWindow(0xff120509);
 
 juce::Font uiFont(float size, bool bold = false) { return juce::Font(juce::FontOptions(size, bold ? juce::Font::bold : juce::Font::plain)); }
-juce::Font monoFont(float size) {
-    return juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), size, juce::Font::bold));
-}
 juce::String rateText(double hz) {
     const auto rounded = juce::roundToInt(hz);
     return juce::String(hz / 1000.0, rounded % 1000 != 0 ? 1 : 0) + " kHz";
 }
+
+// One seven-segment digit from the OS's segment byte: bits 0-6 = g (middle), c, b, a (top), f, e, d (bottom).
+void drawDigit(juce::Graphics& g, juce::Rectangle<float> r, uint8_t bits) {
+    const float t = 6, x = r.getX(), y = r.getY(), w = r.getWidth(), h = r.getHeight();
+    struct Seg { int bit; float x1, y1, x2, y2; };
+    const Seg segs[] = {{3, x + t, y, x + w - t, y},                     // a
+                        {2, x + w, y + t, x + w, y + h / 2 - t},         // b
+                        {1, x + w, y + h / 2 + t, x + w, y + h - t},     // c
+                        {6, x + t, y + h, x + w - t, y + h},             // d
+                        {5, x, y + h / 2 + t, x, y + h - t},             // e
+                        {4, x, y + t, x, y + h / 2 - t},                 // f
+                        {0, x + t, y + h / 2, x + w - t, y + h / 2}};    // g
+    for (const Seg& s : segs) {
+        juce::Path p;
+        p.startNewSubPath(s.x1, s.y1);
+        p.lineTo(s.x2, s.y2);
+        g.setColour((bits >> s.bit) & 1 ? kRed : kGhost);
+        g.strokePath(p, juce::PathStrokeType(6, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+}
+
+juce::String home(const juce::File& f) {
+    const juce::String h = juce::File::getSpecialLocation(juce::File::userHomeDirectory).getFullPathName();
+    const juce::String p = f.getFullPathName();
+    return (p.startsWith(h) ? "~" + p.substring(h.length()) : p) + "/";
+}
 }  // namespace
 
-// ------------------------------------------------------------------ panel buttons
+// ================================================================== Built-in skin
 
-void PhyzoEditor::PanelButton::paint(juce::Graphics& g) {
+void BuiltinView::PanelButton::paint(juce::Graphics& g) {
     const bool on = isEnabled();
     auto r = getLocalBounds().toFloat().reduced(1);
-    g.setColour(down ? kLine : kPanel);
-    g.fillRoundedRectangle(r, 6);
-    g.setColour(on ? kDim : kLine);
+    if (down) { g.setColour(kRed.withAlpha(0.25f)); g.fillRoundedRectangle(r, 6); }
+    g.setColour(kRed.withAlpha(on ? 1.0f : 0.45f));
     g.drawRoundedRectangle(r, 6, 1);
-    g.setColour(on ? kText : kDim.withAlpha(0.5f));
     g.setFont(uiFont(16, true));
     g.drawText(text, getLocalBounds(), juce::Justification::centred);
 }
 
-void PhyzoEditor::PanelButton::mouseDown(const juce::MouseEvent&) {
-    if (!isEnabled()) return;
+void BuiltinView::PanelButton::mouseDown(const juce::MouseEvent& e) {
+    if (!isEnabled() || e.mods.isPopupMenu()) return;
     down = true; repaint();
     proc.engine().pressButton(id, true);
 }
 
-void PhyzoEditor::PanelButton::mouseUp(const juce::MouseEvent&) {
+void BuiltinView::PanelButton::mouseUp(const juce::MouseEvent&) {
     if (!down) return;
     down = false; repaint();
     proc.engine().pressButton(id, false);
 }
 
-// ------------------------------------------------------------------ editor
-
-PhyzoEditor::PhyzoEditor(PhyzoProcessor& p)
-    : AudioProcessorEditor(&p), proc(p),
+BuiltinView::BuiltinView(PhyzoProcessor& p)
+    : proc(p),
       minus(p, 0, juce::String::fromUTF8("\xe2\x97\x80  \xe2\x88\x92")),    // "◀  −"
       plus(p, 1, juce::String::fromUTF8("+  \xe2\x96\xb6")) {               // "+  ▶"
     addAndMakeVisible(minus);
     addAndMakeVisible(plus);
     debugToggle.setToggleState(proc.showDebug, juce::dontSendNotification);
-    debugToggle.setColour(juce::ToggleButton::textColourId, kText);
+    for (auto id : {juce::ToggleButton::textColourId, juce::ToggleButton::tickColourId, juce::ToggleButton::tickDisabledColourId})
+        debugToggle.setColour(id, kRed);
     debugToggle.onClick = [this] { proc.showDebug = debugToggle.getToggleState(); repaint(); };
     addAndMakeVisible(debugToggle);
-    setSize(kW, kH);
+    setSize(kWidth, kHeight);
     timerCallback();
     startTimerHz(15);
 }
 
-PhyzoEditor::~PhyzoEditor() { stopTimer(); }
+BuiltinView::~BuiltinView() { stopTimer(); }
 
-void PhyzoEditor::resized() {
-    minus.setBounds(40, 58, 84, 40);
-    plus.setBounds(kW - 40 - 84, 58, 84, 40);
-    debugToggle.setBounds(14, kDebugY + 6, 90, 22);
+void BuiltinView::resized() {
+    minus.setBounds(40, 60, 84, 40);
+    plus.setBounds(kWidth - 40 - 84, 60, 84, 40);
+    debugToggle.setBounds(12, 217, 90, 22);
 }
 
-void PhyzoEditor::timerCallback() {
-    const bool running = proc.engine().state() == Engine::State::Running;
-    minus.setEnabled(running);
-    plus.setEnabled(running);
+void BuiltinView::mouseDown(const juce::MouseEvent& e) {
+    if (e.mods.isPopupMenu() && onRightClick) onRightClick(e);
+}
+
+void BuiltinView::setNotice(const juce::String& text) {
+    notice_ = text;
+    noticeUntil_ = juce::Time::getMillisecondCounter() + 15000;
     repaint();
 }
 
-void PhyzoEditor::paint(juce::Graphics& g) {
-    g.fillAll(kBg);
-    // header
-    g.setColour(kText);
+void BuiltinView::timerCallback() {
+    const bool running = proc.engine().state() == Engine::State::Running;
+    minus.setEnabled(running);
+    plus.setEnabled(running);
+    if (notice_.isNotEmpty() && juce::Time::getMillisecondCounter() > noticeUntil_) notice_.clear();
+    repaint();
+}
+
+void BuiltinView::paint(juce::Graphics& g) {
+    g.fillAll(kPurple);
+    g.setColour(kHeader);
+    g.fillRect(0, 0, kWidth, 34);
+    g.setColour(kRed);
     g.setFont(uiFont(16, true));
     g.drawText("PHYZO", 16, 0, 200, 34, juce::Justification::centredLeft);
-    g.setColour(kDim);
     g.setFont(uiFont(13));
-    g.drawText("v" JucePlugin_VersionString, kW - 216, 0, 200, 34, juce::Justification::centredRight);
-    g.setColour(kLine);
-    g.drawHorizontalLine(34, 0, float(kW));
+    g.drawText("v" JucePlugin_VersionString, kWidth - 216, 0, 200, 34, juce::Justification::centredRight);
+    g.drawHorizontalLine(34, 0, float(kWidth));
 
-    // the synth's 4-character display
-    const auto st = proc.engine().state();
-    const juce::Rectangle<int> disp((kW - 240) / 2, 50, 240, 56);
-    g.setColour(kLedBg);
-    g.fillRoundedRectangle(disp.toFloat(), 4);
-    g.setColour(kLine);
-    g.drawRoundedRectangle(disp.toFloat(), 4, 1);
-    std::array<char, 4> chars = proc.engine().display();
-    if (st == Engine::State::NoRoms) chars = {'-', '-', '-', '-'};
-    g.setFont(monoFont(34));
-    const int cellW = 44, x0 = disp.getCentreX() - 2 * cellW;
-    for (int i = 0; i < 4; ++i) {
-        g.setColour(st == Engine::State::NoRoms ? kLedOff : kLed);
-        g.drawText(juce::String::charToString(juce::juce_wchar(uint8_t(chars[size_t(i)]))), x0 + i * cellW, disp.getY(), cellW,
-                   disp.getHeight(), juce::Justification::centred);
-    }
-    const uint8_t dots = proc.engine().displayDots();      // decoded by the panel model: 8 = colon, 4 = point
-    g.setColour(kLed);
-    if (dots & 8) { g.fillEllipse(float(x0 + 2 * cellW - 3), float(disp.getY() + 20), 5, 5); g.fillEllipse(float(x0 + 2 * cellW - 3), float(disp.getY() + 33), 5, 5); }
-    if (dots & 4) g.fillEllipse(float(x0 + 3 * cellW - 3), float(disp.getBottom() - 14), 5, 5);
-    g.setColour(kDim);
+    paintDisplay(g, {140, 50, 240, 60});
+    g.setColour(kRed);
     g.setFont(uiFont(12));
-    g.drawText("previous / next preset", disp.getX(), disp.getBottom() + 4, disp.getWidth(), 16, juce::Justification::centred);
+    g.drawText("previous / next preset", 140, 116, 240, 16, juce::Justification::centred);
 
-    paintRoms(g, 136);
-    if (proc.showDebug) paintDebug(g, kDebugY);
-    g.setColour(kLine);
-    g.drawHorizontalLine(kDebugY, 0, float(kW));
+    paintStatus(g, 146);
+    g.setColour(kRed.withAlpha(0.6f));
+    g.drawHorizontalLine(212, 0, float(kWidth));
+    if (proc.showDebug) paintDebug(g, 212);
 }
 
-void PhyzoEditor::paintRoms(juce::Graphics& g, int y) {
-    const romid::ScanResult& s = proc.romScan();
-    const juce::String folder = proc.romFolder().getFullPathName() + "/";
-    auto row = [&](int yy, bool ok, const juce::String& what) {
-        g.setColour(ok ? kOk : kBad);
-        g.fillEllipse(100, float(yy + 5), 8, 8);
-        g.setColour(kText);
-        g.setFont(uiFont(13));
-        g.drawText(what, 116, yy, 130, 18, juce::Justification::centredLeft);
-        g.setColour(ok ? kText : kBad);
-        g.drawText(ok ? "found" : "MISSING", 250, yy, 120, 18, juce::Justification::centredLeft);
-    };
-    g.setColour(kDim);
+void BuiltinView::paintDisplay(juce::Graphics& g, juce::Rectangle<int> area) {
+    g.setColour(kWindow);
+    g.fillRoundedRectangle(area.toFloat(), 4);
+    g.setColour(kRed);
+    g.drawRoundedRectangle(area.toFloat(), 4, 1);
+    const bool noRoms = proc.engine().state() == Engine::State::NoRoms;
+    const std::array<uint8_t, 4> bytes = noRoms ? std::array<uint8_t, 4>{1, 1, 1, 1} : proc.engine().segments();   // dashes
+    const float x0 = float(area.getX()) + 26, y0 = float(area.getY()) + 10;
+    for (int i = 0; i < 4; ++i) drawDigit(g, {x0 + float(i) * 50, y0, 26, 40}, bytes[size_t(i)]);
+    const uint8_t dots = noRoms ? 0 : proc.engine().displayDots();            // 8 = colon, 4 = point
+    auto dot = [&](float x, float y, bool lit) { g.setColour(lit ? kRed : kGhost); g.fillEllipse(x - 3, y - 3, 6, 6); };
+    dot(x0 + 88, y0 + 12, dots & 8);
+    dot(x0 + 88, y0 + 28, dots & 8);
+    dot(x0 + 138, y0 + 40, dots & 4);
+}
+
+void BuiltinView::paintStatus(juce::Graphics& g, int y) {
+    g.setColour(kRed);
     g.setFont(uiFont(13, true));
-    g.drawText("ROMs", 20, y, 70, 18, juce::Justification::centredLeft);
-    row(y, s.hasOs(), "OS image");
-    row(y + 18, s.hasWave(), "Wave image");
-    g.setFont(uiFont(12));
-    int yy = y + 40;
-    if (s.complete()) {
-        g.setColour(kDim);
-        g.drawText(folder, 100, yy, kW - 110, 16, juce::Justification::centredLeft);
-        yy += 28;
-        // engine status
-        g.setFont(uiFont(13, true));
-        g.drawText("Status", 20, yy, 70, 18, juce::Justification::centredLeft);
-        g.setFont(uiFont(13));
-        g.setColour(kText);
-        juce::String status;
+    g.drawText("Status", 20, y, 70, 18, juce::Justification::centredLeft);
+    g.setFont(uiFont(13));
+    const romid::ScanResult& s = proc.romScan();
+    juce::String line1, line2;
+    if (!s.complete()) {
+        // Only when a ROM is missing (or has the wrong checksum): which one, and where it goes.
+        juce::String what = !s.hasOs() && !s.hasWave() ? "the OS image and the native wave image" : !s.hasOs() ? "the OS image" : "the native wave image";
+        line1 = "Missing (or wrong checksum): " + what + ".";
+        line2 = "Copy " + juce::String(!s.hasOs() && !s.hasWave() ? "them" : "it") + " into " + home(proc.romFolder());   // same as romMessage()
+    } else {
         switch (proc.engine().state()) {
-        case Engine::State::NoRoms: status = "waiting for the ROMs"; break;
-        case Engine::State::Booting: status = juce::String::fromUTF8("booting\xe2\x80\xa6"); break;
+        case Engine::State::NoRoms: line1 = "waiting for the ROMs"; break;
+        case Engine::State::Booting: line1 = juce::String::fromUTF8("booting\xe2\x80\xa6"); break;
         case Engine::State::Running:
-            status = "running " + juce::String::fromUTF8("\xc2\xb7") + " 44.1 kHz " + juce::String::fromUTF8("\xe2\x86\x92") +
-                     " host " + rateText(proc.hostRate());
+            line1 = "running " + juce::String::fromUTF8("\xc2\xb7") + " 44.1 kHz " + juce::String::fromUTF8("\xe2\x86\x92") + " host " + rateText(proc.hostRate());
             break;
-        case Engine::State::Stopped: status = "stopped"; break;
+        case Engine::State::Stopped: line1 = "stopped"; break;
         }
-        g.drawText(status, 100, yy, kW - 110, 18, juce::Justification::centredLeft);
-        const juce::String msg(proc.engine().message());
-        if (msg.isNotEmpty()) {
-            g.setColour(proc.engine().state() == Engine::State::Stopped ? kBad : kDim);
-            g.setFont(uiFont(12));
-            g.drawFittedText(msg, 100, yy + 18, kW - 110, 32, juce::Justification::topLeft, 2);
-        }
-        return;
+        line2 = juce::String(proc.engine().message());
     }
-    g.setColour(kText);
-    juce::String what;
-    if (!s.hasOs() && !s.hasWave()) what = "the OS image and the native wave image (4 MB)";
-    else if (!s.hasOs()) what = "the OS image";
-    else what = "the native wave image (4 MB)";
-    g.drawText("Put " + what + " into:", 20, yy, kW - 30, 16, juce::Justification::centredLeft);
-    g.setColour(kLed);
-    g.drawText("   " + folder, 20, yy + 16, kW - 30, 16, juce::Justification::centredLeft);
-    g.setColour(kText);
-    g.drawText("Any file name works; it is recognised by checksum.", 20, yy + 34, kW - 30, 16, juce::Justification::centredLeft);
-    juce::String wrong;
-    for (const auto& r : s.rejected) if (!r.md5.empty()) wrong << (wrong.isEmpty() ? "" : ", ") << juce::String(r.name);
-    int ly = yy + 50;
-    if (wrong.isNotEmpty()) {
-        g.setColour(kBad);
-        g.drawText("Found but wrong checksum: " + wrong, 20, ly, kW - 30, 16, juce::Justification::centredLeft);
-        ly += 16;
-    }
-    g.setColour(kDim);
-    const bool both = !s.hasOs() && !s.hasWave();
-    g.drawText(juce::String::fromUTF8(both ? "Waiting for the files\xe2\x80\xa6" : "Waiting for the file\xe2\x80\xa6"), 20, ly, kW - 30, 16,
-               juce::Justification::centredLeft);
+    g.drawText(line1, 100, y, kWidth - 110, 18, juce::Justification::centredLeft);
+    g.setFont(uiFont(12));
+    if (line2.isNotEmpty()) g.drawFittedText(line2, 100, y + 18, kWidth - 110, 16, juce::Justification::topLeft, 1);
+    if (notice_.isNotEmpty()) g.drawFittedText(notice_, 20, y + 36, kWidth - 30, 28, juce::Justification::topLeft, 2, 0.9f);
 }
 
-void PhyzoEditor::paintDebug(juce::Graphics& g, int y) {
+void BuiltinView::paintDebug(juce::Graphics& g, int y) {
     const auto& m = proc.meter;
     g.setFont(uiFont(12));
-    g.setColour(kText);
+    g.setColour(kRed);
     const float avg = m.avg.load() * 100, peak = m.peak.load() * 100;
-    g.drawText("CPU per block", 20, y + 32, 100, 16, juce::Justification::centredLeft);
-    g.drawText("avg " + juce::String(avg, 1) + " %", 130, y + 32, 90, 16, juce::Justification::centredLeft);
-    g.setColour(peak > 100 ? kBad : kText);
-    g.drawText("peak " + juce::String(peak, 1) + " %", 220, y + 32, 100, 16, juce::Justification::centredLeft);
+    g.drawText("CPU per block", 20, y + 34, 100, 16, juce::Justification::centredLeft);
+    g.drawText("avg " + juce::String(avg, 1) + " %", 130, y + 34, 90, 16, juce::Justification::centredLeft);
+    g.drawText("peak " + juce::String(peak, 1) + " %", 220, y + 34, 100, 16, juce::Justification::centredLeft);
     // history: one bar per second, newest on the right; full height = 100 %
     const uint32_t head = m.head.load();
     const int n = int(m.history.size()), bx = 330, bw = 10, bh = 16;
     for (int i = 0; i < n; ++i) {
         const float v = juce::jlimit(0.0f, 1.0f, m.history[size_t((head + uint32_t(i)) % uint32_t(n))].load());
-        g.setColour(kLine);
-        g.fillRect(bx + i * (bw + 2), y + 32, bw, bh);
-        g.setColour(v > 0.8f ? kBad : kOk);
-        const int h = int(std::round(v * bh));
-        g.fillRect(bx + i * (bw + 2), y + 32 + bh - h, bw, h);
+        g.setColour(kRed.withAlpha(0.6f));
+        g.drawRect(bx + i * (bw + 2), y + 34, bw, bh, 1);
+        g.setColour(kRed);
+        const int hh = int(std::round(v * bh));
+        g.fillRect(bx + i * (bw + 2), y + 34 + bh - hh, bw, hh);
     }
-    g.setColour(kDim);
     const juce::String dot = juce::String::fromUTF8(" \xc2\xb7 ");
+    g.setColour(kRed.withAlpha(0.85f));
+    g.setFont(uiFont(11));
     g.drawText("block " + juce::String(m.blockSize.load()) + " smp" + dot + juce::String(m.blockMs.load(), 1) + " ms" + dot + "last " +
                    juce::String(m.lastMs.load(), 2) + " ms" + dot + "overruns " + juce::String(juce::int64(m.overruns.load())),
-               20, y + 50, kW - 30, 16, juce::Justification::centredLeft);
+               20, y + 52, kWidth - 30, 16, juce::Justification::centredLeft);
+}
+
+// ================================================================== editor
+
+PhyzoEditor::PhyzoEditor(PhyzoProcessor& p) : AudioProcessorEditor(&p), proc(p) {
+    zoom_ = SkinSettings::zoom();
+    juce::String want = SkinSettings::skin();
+    if (want.isEmpty()) want = skinNames().contains(SkinSettings::kDefaultSkin) ? SkinSettings::kDefaultSkin : SkinSettings::kBuiltIn;
+    setSize(BuiltinView::kWidth, BuiltinView::kHeight);
+    showSkin(want);
+    startTimer(1000);
+}
+
+// The same short message as Built-in's Status line, over a file skin, while a ROM is missing.
+static juce::String romMessage(const PhyzoProcessor& proc) {
+    const romid::ScanResult& s = proc.romScan();
+    if (s.complete()) return {};
+    const juce::String what = !s.hasOs() && !s.hasWave() ? "the OS image and the native wave image" : !s.hasOs() ? "the OS image" : "the native wave image";
+    return "Missing (or wrong checksum): " + what + ". Copy " + juce::String(!s.hasOs() && !s.hasWave() ? "them" : "it") + " into " +
+           home(proc.romFolder());
+}
+
+void PhyzoEditor::timerCallback() {
+    if (rml_) rml_->setPersistentMessage(romMessage(proc));
+}
+
+PhyzoEditor::~PhyzoEditor() {
+    stopTimer();
+    rml_.reset();                                    // closes its OpenGL context first
+    builtin_.reset();
+}
+
+juce::StringArray PhyzoEditor::skinNames() const {
+    juce::StringArray names;
+    for (const auto& s : skin::discoverSkins(proc.skinsFolder().getFullPathName().toStdString())) names.add(juce::String::fromUTF8(s.name.c_str()));
+    return names;
+}
+
+juce::File PhyzoEditor::skinFolder(const juce::String& name) const { return proc.skinsFolder().getChildFile(name); }
+
+void PhyzoEditor::showSkin(const juce::String& name, const juce::String& notice) {
+    if (name == SkinSettings::kBuiltIn) { showBuiltIn(notice); return; }
+    if (!skinNames().contains(name)) {
+        skinFailed(name, "it is not in " + home(proc.skinsFolder()) + " (a skin is a folder <name> containing <name>.rml)");
+        return;
+    }
+    builtin_.reset();
+    if (!rml_) {
+        rml_ = std::make_unique<RmlSkinComponent>(proc);
+        rml_->onRightClick = [this](const juce::MouseEvent& e) { showMenu(e); };
+        addAndMakeVisible(*rml_);
+    }
+    current_ = name;
+    rml_->onLoaded = [this, name, notice](bool ok, const juce::String& error) {
+        if (!ok) { skinFailed(name, error); return; }
+        if (notice.isNotEmpty() && rml_) rml_->showMessage(notice);
+    };
+    rml_->setDebugger(debugger_);
+    rml_->setPersistentMessage(romMessage(proc));
+    rml_->loadSkin(skinFolder(name), name);
+    applyZoom();
+}
+
+void PhyzoEditor::showBuiltIn(const juce::String& notice) {
+    rml_.reset();
+    if (!builtin_) {
+        builtin_ = std::make_unique<BuiltinView>(proc);
+        builtin_->onRightClick = [this](const juce::MouseEvent& e) { showMenu(e); };
+        addAndMakeVisible(*builtin_);
+    }
+    current_ = SkinSettings::kBuiltIn;
+    if (notice.isNotEmpty()) builtin_->setNotice(notice);
+    applyZoom();
+}
+
+// A skin that is missing or fails to load: rack, then Built-in, saying why.
+// (Deferred: this can be called from inside the failed skin's own callback.)
+void PhyzoEditor::skinFailed(const juce::String& name, const juce::String& reason) {
+    const juce::String why = "The skin \"" + name + "\" could not be shown: " + reason.trim();
+    juce::MessageManager::callAsync([sp = juce::Component::SafePointer<PhyzoEditor>(this), name, why] {
+        if (!sp) return;
+        if (name != SkinSettings::kDefaultSkin && sp->skinNames().contains(SkinSettings::kDefaultSkin))
+            sp->showSkin(SkinSettings::kDefaultSkin, why + juce::String::fromUTF8(" \xe2\x80\x94 showing \"rack\"."));
+        else
+            sp->showBuiltIn(why);
+    });
+}
+
+void PhyzoEditor::applyZoom() {
+    const float z = float(zoom_) / 100.0f;
+    if (builtin_) {
+        builtin_->setTransform(juce::AffineTransform::scale(z));
+        setSize(juce::roundToInt(BuiltinView::kWidth * z), juce::roundToInt(BuiltinView::kHeight * z));
+    } else if (rml_) {
+        rml_->setZoom(z);
+        setSize(juce::roundToInt(skin::kBodyWidthDp * z), juce::roundToInt(skin::kBodyHeightDp * z));
+    }
+    resized();
+}
+
+void PhyzoEditor::resized() {
+    if (builtin_) builtin_->setBounds(0, 0, BuiltinView::kWidth, BuiltinView::kHeight);   // scaled by its transform
+    if (rml_) rml_->setBounds(getLocalBounds());
+}
+
+void PhyzoEditor::showMenu(const juce::MouseEvent&) {
+    const juce::StringArray names = skinNames();
+    const bool fileSkin = rml_ != nullptr;
+    juce::PopupMenu skins, zoom, dev, menu;
+    skins.addItem(SkinSettings::kBuiltIn, true, current_ == SkinSettings::kBuiltIn, [this] {
+        SkinSettings::setSkin(SkinSettings::kBuiltIn);
+        showSkin(SkinSettings::kBuiltIn);
+    });
+    for (const juce::String& n : names)
+        skins.addItem(n, true, current_ == n, [this, n] { SkinSettings::setSkin(n); showSkin(n); });
+    for (int z : SkinSettings::kZooms)
+        zoom.addItem(juce::String(z) + " %", true, zoom_ == z, [this, z] { zoom_ = z; SkinSettings::setZoom(z); applyZoom(); });
+    dev.addItem("RmlUi debugger", fileSkin, fileSkin && debugger_, [this] {
+        debugger_ = !debugger_;
+        if (rml_) rml_->setDebugger(debugger_);
+    });
+    menu.addSubMenu("Skin", skins);
+    menu.addItem("Reload skin    F5", fileSkin, false, [this] { if (rml_) rml_->reload(); });
+    menu.addSubMenu("Zoom", zoom);
+    menu.addSeparator();
+    menu.addSubMenu("Developer", dev);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition());
 }

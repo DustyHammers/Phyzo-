@@ -16,6 +16,10 @@ owner step by step through anything they must do by hand on github.com or on the
    "Planned dependencies" entry for each dependency (full licence text and version) when it is added.
 6. **Identify ROMs by checksum, never by file name** (`phyzo-emu/src/rom_id.*`):
    OS image MD5 `8de06f48bfb0d847cacab05b763e22c5`, native wave image MD5 `42a974e31e48b05815d07554d0063171`.
+7. **Never commit skins, images or fonts.** Skins live in `~/Documents/Phyzo/skins/<name>/` on the owner's Mac; the
+   repo has only the skin engine and the text-only test skin (`plugin/skin/tests/skins/`). CI rejects image and font
+   files and .rml/.rcss files outside the test skin. Gearmulator's skinning and Lua docs are a design reference
+   only: write our own code.
 
 ## Naming and identity
 
@@ -50,6 +54,12 @@ owner step by step through anything they must do by hand on github.com or on the
   (`resampler.*`). `plugin/` wraps it (JUCE) and scans `~/Documents/Phyzo/roms/`. Musashi has one global CPU:
   machines take turns under a lock (`Machine::becomeCpuOwner`). Project state = complete machine state
   (`Machine::saveState`), tied to the ROM checksums.
+- Skins: `plugin/skin/` (no JUCE) is the runtime: RmlUi 6.3 + Lua 5.4 (sandboxed, 3 s limit) + FreeType, the custom
+  elements knob/pbutton/led/vfdigit and the `panel`/`plugin` Lua API; `skin_test` drives the test skin in CI.
+  `plugin/Source/RmlSkinComponent.*` draws a file skin with OpenGL (all RmlUi/Lua work on the GL thread);
+  `PluginEditor.*` has the Built-in skin, the right-click menu, zoom and the fallback (rack, then Built-in).
+  Skin authoring guide: `docs/SKINS.md`. Skin and zoom are global settings, never project state or parameters;
+  per-element knob positions are project state (processor state version 2).
 - Panel analog controls (26, `Bx cc vv`, raw 0-1023): `phyzo-emu/docs/PANEL_CONTROLS.md`. Their positions are the
   panel's physical state (`PanelModel::controls`, saved with the machine), never host parameters. The pitch wheel
   must be answered at 512 to the OS's F4 request.

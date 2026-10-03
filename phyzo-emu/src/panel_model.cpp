@@ -125,10 +125,12 @@ void PanelModel::complete() {
         history({msgStart_, text_, raw_, dots_});
     } else if (st == 0x9d && msg_.size() > 2) {
         ledState[msg_[1]] = 2;
+        if (onLed) onLed(st, msg_[1], msg_[2], msgStart_);
         std::snprintf(buf, sizeof buf, "LED %02X flashing, rate %02X", msg_[1], msg_[2]);
         d = buf;
     } else if (st >= 0x90 && st <= 0x9f && msg_.size() > 1) {
         ledState[msg_[1]] = st - 0x90;
+        if (onLed) onLed(st, msg_[1], 0, msgStart_);
         std::snprintf(buf, sizeof buf, "LED %02X state %d", msg_[1], st - 0x90);
         d = buf;
     } else {
