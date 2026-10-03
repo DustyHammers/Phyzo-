@@ -199,6 +199,10 @@ void BuiltinView::paintDebug(juce::Graphics& g, int y) {
     g.drawText("block " + juce::String(m.blockSize.load()) + " smp" + dot + juce::String(m.blockMs.load(), 1) + " ms" + dot + "last " +
                    juce::String(m.lastMs.load(), 2) + " ms" + dot + "overruns " + juce::String(juce::int64(m.overruns.load())),
                20, y + 52, kWidth - 30, 16, juce::Justification::centredLeft);
+    g.drawText("worst block " + juce::String(m.worstMs.load(), 2) + " ms" + dot + "audio lock wait " +
+                   juce::String(proc.engine().maxLockWaitUs() / 1000.0, 2) + " ms" + dot + "state requests " +
+                   juce::String(juce::int64(m.stateRequests.load())),
+               20, y + 68, kWidth - 30, 16, juce::Justification::centredLeft);
 }
 
 // ================================================================== editor

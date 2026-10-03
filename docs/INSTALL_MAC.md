@@ -107,7 +107,9 @@ The **Built-in** skin shows:
   file is missing (or has the wrong checksum) it says which one and where to put it.
 - **Debug**: CPU use per audio block (average and peak over the last second, one bar per second), the block size and
   length, the last block's processing time, and **overruns** (blocks that took longer than their real-time budget;
-  any overrun can be heard as a dropout).
+  any overrun can be heard as a dropout). The third line: the **worst block** time and the longest **audio lock
+  wait** since playback started, and how many times the host asked for the plugin's **state** (REAPER does this
+  after clicks in a plugin window). These reset when the host restarts audio.
 
 Play Phyzo from a MIDI track. Everything the synth does (including the selected preset, any edits made over
 MIDI and the knob positions) is saved with the REAPER project and restored when you open it.

@@ -189,3 +189,13 @@ constant latency, which the plugin reports to the host. The ESP2 DAC output (24-
 added delay). `Machine::saveState()/loadState()` hold the complete machine (CPU, RAM, all devices, timing); flash
 and wave memory are not stored. Several machines can run in one process: Musashi's single CPU is shared under a
 lock, with each machine's CPU state parked while another one runs.
+
+## phyzo_stress: real-time check of the plugin engine
+
+    build/phyzo_stress [--seconds S] [--no-state]
+
+No ROMs needed (a small program of our own stands in for the OS). Runs the engine as a host would, one block per
+period, at 512 and 128 samples and 44.1 and 48 kHz, while another thread sweeps a knob (one move per ms), presses a
+button every 50 ms and asks for the state every 100 ms. Prints mean, 99.9th percentile and worst block time,
+overruns and the longest wait for the engine lock. On a shared machine the worst block also shows the machine's own
+scheduling noise; the lock wait is the part the engine controls.

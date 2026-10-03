@@ -60,6 +60,10 @@ owner step by step through anything they must do by hand on github.com or on the
   `PluginEditor.*` has the Built-in skin, the right-click menu, zoom and the fallback (rack, then Built-in).
   Skin authoring guide: `docs/SKINS.md`. Skin and zoom are global settings, never project state or parameters;
   per-element knob positions are project state (processor state version 2).
+- Real-time rules for `engine.*`: the audio thread never waits on other threads. `getState` asks the audio thread
+  for a snapshot at a block boundary (`Machine::saveStateInto`, preallocated); panel controls go through a
+  lock-free latest-value slot per cc, sent at most once per 10 ms each and only while the panel link keeps up;
+  buttons go through a lock-free ring and are never merged or dropped. `phyzo_stress` measures this.
 - Panel analog controls (26, `Bx cc vv`, raw 0-1023): `phyzo-emu/docs/PANEL_CONTROLS.md`. Their positions are the
   panel's physical state (`PanelModel::controls`, saved with the machine), never host parameters. The pitch wheel
   must be answered at 512 to the OS's F4 request.

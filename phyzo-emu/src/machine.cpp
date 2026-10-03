@@ -411,8 +411,17 @@ constexpr uint32_t kStateVersion = 1;
 }
 
 std::vector<uint8_t> Machine::saveState() {
+    std::vector<uint8_t> out;
+    saveStateInto(out);
+    return out;
+}
+
+// Writes into `out`, reusing its capacity (no allocation once it is large enough: used on the audio thread).
+void Machine::saveStateInto(std::vector<uint8_t>& out) {
     CpuLock cpu(*this);
     StateWriter w;
+    out.clear();
+    w.bytes.swap(out);
     w.raw("PHZM", 4);
     w.put(kStateVersion);
     w.section("MACH", [&](StateWriter& s) {
@@ -423,9 +432,9 @@ std::vector<uint8_t> Machine::saveState() {
         s.vec(ram_);
     });
     w.section("CPU ", [&](StateWriter& s) {
-        std::vector<uint8_t> c(phyzo_cpu_state_size());
-        phyzo_cpu_save_portable(c.data());
-        s.vec(c);
+        cpuSnap_.resize(phyzo_cpu_state_size());        // kept between saves: no allocation after the first
+        phyzo_cpu_save_portable(cpuSnap_.data());
+        s.vec(cpuSnap_);
     });
     w.section("TIM1", [&](StateWriter& s) { timer1.save(s); });
     w.section("SER ", [&](StateWriter& s) { serial.save(s); });
@@ -433,7 +442,7 @@ std::vector<uint8_t> Machine::saveState() {
     w.section("VOIC", [&](StateWriter& s) { voice.save(s); });
     w.section("ESP2", [&](StateWriter& s) { esp2.save(s); });
     w.section("PANL", [&](StateWriter& s) { panel.save(s); });
-    return std::move(w.bytes);
+    out.swap(w.bytes);
 }
 
 bool Machine::loadState(const std::vector<uint8_t>& data, std::string& err) {

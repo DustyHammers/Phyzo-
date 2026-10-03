@@ -30,14 +30,19 @@ public:
 
     // ---- message thread
     void setRoms(const std::string& osPath, const std::string& wavePath, const std::string& osMd5, const std::string& waveMd5);
-    std::vector<uint8_t> getState();                 // engine state blob (empty if there is nothing to save)
+    // Engine state blob (empty if there is nothing to save). While audio runs, the audio thread takes the snapshot
+    // at a block boundary (about 0.05 ms, no allocation), so the host asking for the state never blocks the audio.
+    std::vector<uint8_t> getState();
     void setState(const std::vector<uint8_t>& blob); // restores now, or as soon as the ROMs are known
     // Front-panel button press/release by OS button id (0 = -/No, 1 = +/Yes); lock-free, message thread.
     void pressButton(int osButton, bool down);
-    // An analog panel control moved (docs/PANEL_CONTROLS.md): cc 0-25, raw 0-1023. Lock-free, message thread.
-    // The running machine receives one Bx cc vv; the position is kept (saved with the machine state) and is what
-    // the panel answers to the OS's F4 request when a machine boots.
+    // An analog panel control moved (docs/PANEL_CONTROLS.md): cc 0-25, raw 0-1023. Lock-free, any UI thread.
+    // Like the real panel's serial link, each control sends at most one Bx cc vv per kControlIntervalMs (the latest
+    // value wins) and only while the link is not backed up; buttons are never dropped or merged. The position is kept
+    // (saved with the machine state) and is what the panel answers to the OS's F4 request when a machine boots.
     void setControl(int cc, int raw);
+    static constexpr double kControlIntervalMs = 10;
+    static constexpr size_t kPanelBacklogBytes = 9;  // knob messages wait while more bytes than this are unread
     int controlPosition(int cc) const { return cc >= 0 && cc < 26 ? positions_[size_t(cc)].load() : 0; }
     // A front-panel button by its panel id (raw): sends 81 raw (down) or 80 raw (up). Lock-free for the audio thread.
     void pressRaw(int raw, bool down);
@@ -67,6 +72,10 @@ public:
     uint32_t peekForTest(uint32_t addr, int size);
     std::vector<uint64_t> midiQueueForTest();        // scheduled machine cycles of the MIDI events so far (last 64)
     uint64_t lateMidiForTest() const { return lateMidi_; }   // events that could not be scheduled on time
+    uint64_t controlMessagesForTest() const { return controlMessages_; }   // Bx messages sent to the machine
+    uint64_t buttonMessagesForTest() const { return buttonMessages_; }     // 80/81 messages sent to the machine
+    // Longest time the audio thread waited for the engine lock (microseconds), since prepare().
+    double maxLockWaitUs() const { return maxLockWaitUs_.load(); }
     uint64_t anchorForTest();
     double cpuHzForTest();
 
@@ -85,6 +94,8 @@ private:
     void publishPositions(const Machine& m);
     void push(uint32_t entry);
     void attachLeds(Machine& m);
+    void sendControls(Machine& m);
+    void serveSnapshot(Machine& m);
     void publishLeds(const Machine& m);
 
     // ROMs (message thread)
@@ -123,8 +134,20 @@ private:
     mutable std::mutex msgMtx_;
     std::string message_;
 
-    // panel buttons and controls: ring (UI threads) -> audio thread
-    static constexpr int kButtonRing = 64;
+    // state snapshots for getState (taken by the audio thread)
+    std::mutex getStateMtx_;                         // one getState at a time
+    std::atomic<uint32_t> snapRequest_{0}, snapDone_{0};
+    std::vector<uint8_t> snap_;                      // written by the audio thread between request and done
+    std::atomic<int64_t> lastProcessMs_{-100000};    // when process() last ran (steady clock, ms)
+    std::atomic<double> maxLockWaitUs_{0};
+
+    // panel controls: latest value per cc (bit 15 = new), sent by the audio thread, paced
+    std::array<std::atomic<uint16_t>, 26> pendingControl_{};
+    std::array<uint64_t, 26> controlSentAt_{};       // machine cycle of each control's last message (audio thread)
+    uint64_t controlMessages_ = 0, buttonMessages_ = 0;
+
+    // panel buttons: ring (UI threads) -> audio thread, never merged
+    static constexpr int kButtonRing = 1024;
     std::array<std::atomic<uint32_t>, kButtonRing> buttons_{};   // (kind << 24) | payload
     std::mutex pushMtx_;                                         // producers: message thread and skin render thread
     std::array<std::atomic<uint16_t>, 26> positions_{};          // current control positions (for the UI)

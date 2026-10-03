@@ -33,7 +33,7 @@ int PanelModel::expectedData(uint8_t st) const {
 void PanelModel::onOsByte(uint8_t b, uint64_t cycle) {
     if (b & 0x80) {
         if (!msg_.empty()) {
-            log({msgStart_, true, msg_, "incomplete message"});
+            if (keepLog) log({msgStart_, true, msg_, "incomplete message"});
             ++unknownMessages;
             msg_.clear();
         }
@@ -48,7 +48,7 @@ void PanelModel::onOsByte(uint8_t b, uint64_t cycle) {
             msg_.push_back(status_);
             msgStart_ = cycle;
         } else {
-            log({cycle, true, {b}, "orphan data byte"});
+            if (keepLog) log({cycle, true, {b}, "orphan data byte"});
             ++unknownMessages;
             return;
         }
@@ -66,21 +66,21 @@ void PanelModel::complete() {
         d = (msg_.size() > 1 && msg_[1] == 0x33) ? "hello" : "F0 with unexpected data";
         if (replyHello && msg_.size() > 1 && msg_[1] == 0x33 && sendToOs) {
             uint64_t when = msgStart_ + uint64_t(helloDelayMs * cyclesPerMs);
-            log({msgStart_, true, msg_, d});
+            if (keepLog) log({msgStart_, true, msg_, d});
             msg_.clear();
             sendToOs({0xf0, 0x33}, when);
-            log({when, false, {0xf0, 0x33}, "hello reply (panel model)"});
+            if (keepLog) log({when, false, {0xf0, 0x33}, "hello reply (panel model)"});
             return;
         }
     } else if (st == 0xf2) {
         ++f2Count;
         d = "F2 handshake";
         if (replyF2 >= 0 && sendToOs) {
-            log({msgStart_, true, msg_, d});
+            if (keepLog) log({msgStart_, true, msg_, d});
             msg_.clear();
             uint64_t when = msgStart_ + uint64_t(helloDelayMs * cyclesPerMs);
             sendToOs({0xf2, uint8_t(replyF2 & 0x7f)}, when);
-            log({when, false, {0xf2, uint8_t(replyF2 & 0x7f)}, "F2 reply (panel model)"});
+            if (keepLog) log({when, false, {0xf2, uint8_t(replyF2 & 0x7f)}, "F2 reply (panel model)"});
             return;
         }
     } else if (st == 0xf3) {
@@ -89,7 +89,7 @@ void PanelModel::complete() {
         ++f4Count;
         d = "F4 request: report all analog controls";
         if ((answerF4 || answerF4Value >= 0) && sendToOs) {
-            log({msgStart_, true, msg_, d});
+            if (keepLog) log({msgStart_, true, msg_, d});
             msg_.clear();
             std::vector<uint8_t> out;
             for (uint8_t i = 0; i < kControls; ++i) {      // one message per control, in cc order
@@ -102,7 +102,7 @@ void PanelModel::complete() {
             sendToOs(out, when);
             if (answerF4Value >= 0) std::snprintf(buf, sizeof buf, "26 control reports, value %d (panel model)", answerF4Value & 0x3ff);
             else std::snprintf(buf, sizeof buf, "26 control reports, panel positions (panel model)");
-            log({when, false, out, buf});
+            if (keepLog) log({when, false, out, buf});
             return;
         }
     } else if (st >= 0x93 && st <= 0x96 && msg_.size() > 1) {
@@ -110,34 +110,36 @@ void PanelModel::complete() {
         raw_[pos] = msg_[1];
         std::string t;
         for (int i = 0; i < 4; ++i) t += decodeSeg(raw_[i]);
-        std::snprintf(buf, sizeof buf, "digit %d = %02X '%s' -> \"%s\"", pos, msg_[1],
-                      decodeSeg(msg_[1]).c_str(), t.c_str());
-        d = buf;
+        if (keepLog) {
+            std::snprintf(buf, sizeof buf, "digit %d = %02X '%s' -> \"%s\"", pos, msg_[1],
+                          decodeSeg(msg_[1]).c_str(), t.c_str());
+            d = buf;
+        }
         if (t != text_ || displayHistory.empty() || displayHistory.back().raw != raw_) {
             text_ = t;
             history({msgStart_, t, raw_, dots_});
         }
     } else if (st == 0x97 && msg_.size() > 1) {
         dots_ = msg_[1];
-        std::snprintf(buf, sizeof buf, "dots = %02X%s%s", dots_, (dots_ & 8) ? " colon" : "",
-                      (dots_ & 4) ? " point" : "");
-        d = buf;
+        if (keepLog) {
+            std::snprintf(buf, sizeof buf, "dots = %02X%s%s", dots_, (dots_ & 8) ? " colon" : "",
+                          (dots_ & 4) ? " point" : "");
+            d = buf;
+        }
         history({msgStart_, text_, raw_, dots_});
     } else if (st == 0x9d && msg_.size() > 2) {
         ledState[msg_[1]] = 2;
         if (onLed) onLed(st, msg_[1], msg_[2], msgStart_);
-        std::snprintf(buf, sizeof buf, "LED %02X flashing, rate %02X", msg_[1], msg_[2]);
-        d = buf;
+        if (keepLog) { std::snprintf(buf, sizeof buf, "LED %02X flashing, rate %02X", msg_[1], msg_[2]); d = buf; }
     } else if (st >= 0x90 && st <= 0x9f && msg_.size() > 1) {
         ledState[msg_[1]] = st - 0x90;
         if (onLed) onLed(st, msg_[1], 0, msgStart_);
-        std::snprintf(buf, sizeof buf, "LED %02X state %d", msg_[1], st - 0x90);
-        d = buf;
+        if (keepLog) { std::snprintf(buf, sizeof buf, "LED %02X state %d", msg_[1], st - 0x90); d = buf; }
     } else {
         ++unknownMessages;
-        d = "unknown";
+        if (keepLog) d = "unknown";
     }
-    log({msgStart_, true, msg_, d});
+    if (keepLog) log({msgStart_, true, msg_, d});
     msg_.clear();
 }
 
@@ -145,7 +147,7 @@ void PanelModel::onResetPin(bool asserted, uint64_t cycle) {
     if (asserted == resetAsserted_) return;
     resetAsserted_ = asserted;
     if (!asserted) ++resetPulses;
-    log({cycle, true, {}, asserted ? "OP0 set (panel reset asserted)" : "OP0 cleared (panel reset released)"});
+    if (keepLog) log({cycle, true, {}, asserted ? "OP0 set (panel reset asserted)" : "OP0 cleared (panel reset released)"});
 }
 
 void PanelModel::moveControl(int cc, int raw, uint64_t cycle) {
@@ -156,7 +158,7 @@ void PanelModel::moveControl(int cc, int raw, uint64_t cycle) {
 }
 
 void PanelModel::inject(const std::vector<uint8_t>& bytes, uint64_t cycle, const std::string& note) {
-    log({cycle, false, bytes, note});
+    if (keepLog) log({cycle, false, bytes, note});
     if (sendToOs) sendToOs(bytes, cycle);
 }
 

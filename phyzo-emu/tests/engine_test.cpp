@@ -1,6 +1,7 @@
 // Engine test (no ROM data): a small MIDI-echo program of our own stands in for the OS image, with an empty wave
 // image. Checks booting on the worker thread, block processing at several host rates, sample-accurate MIDI timing,
 // the reported latency, and state save/restore through the engine.
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -92,6 +93,57 @@ int main() {
         std::vector<float> l(256), rr(256);
         e.process(l.data(), rr.data(), 256, nullptr, 0);
         CHECK(e.controlPosition(11) == 700);
+        CHECK(e.controlMessagesForTest() == 1);
+    }
+
+    // Knob moves are paced like the panel's serial link: per control the latest value, at most one message per
+    // 10 ms, and none while the link is backed up. Buttons are never merged or dropped. (This program never reads
+    // the panel port, so its bytes stay queued: 3 per knob message.)
+    {
+        std::vector<float> l(256), rr(256);
+        auto block = [&] { e.process(l.data(), rr.data(), 256, nullptr, 0); };   // 2.7-5.8 ms of machine time
+        for (int i = 0; i < 100; ++i) e.setControl(5, i);
+        block();
+        CHECK(e.controlMessagesForTest() == 2);                      // 100 moves -> 1 message
+        CHECK(e.controlPosition(5) == 99);
+        e.setControl(5, 500);
+        block();
+        CHECK(e.controlMessagesForTest() == 2);                      // within 10 ms of the last one: waits
+        for (int i = 0; i < 8; ++i) block();
+        CHECK(e.controlMessagesForTest() == 3);                      // then the latest value goes, once
+        e.setControl(6, 100);
+        block();
+        CHECK(e.controlMessagesForTest() == 4);                      // another control: its own 10 ms
+        e.setControl(7, 1);
+        for (int i = 0; i < 8; ++i) block();
+        CHECK(e.controlMessagesForTest() == 4);                      // 12 bytes unread: the knob waits
+        const uint64_t b0 = e.buttonMessagesForTest();
+        for (int i = 0; i < 300; ++i) e.pressRaw(0x10, i % 2 == 0);
+        block();
+        CHECK(e.buttonMessagesForTest() == b0 + 300);                // buttons always go, in order
+    }
+
+    // The host asking for the state while audio runs: served by the audio thread at a block boundary.
+    {
+        std::atomic<bool> run{true};
+        std::thread audio([&] {
+            std::vector<float> l(256), rr(256);
+            while (run) { e.process(l.data(), rr.data(), 256, nullptr, 0); std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        const auto t0 = std::chrono::steady_clock::now();
+        const std::vector<uint8_t> blob = e.getState();
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        run = false;
+        audio.join();
+        CHECK(!blob.empty());
+        CHECK(ms < 100);                                             // not the 500 ms fallback
+        CHECK(e.maxLockWaitUs() >= 0);
+        Engine g;
+        g.setState(blob);
+        g.setRoms(osPath, wavePath, "os-md5", "wave-md5");
+        CHECK(waitRunning(g));
+        CHECK(g.controlPosition(11) == 700);
     }
 
     // Engine state round trip: a second engine restored from the first matches it exactly.

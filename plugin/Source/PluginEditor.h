@@ -11,7 +11,7 @@ class RmlSkinComponent;
 // previous/next preset, Status, and the Debug section with CPU per block. No image files.
 class BuiltinView : public juce::Component, private juce::Timer {
 public:
-    static constexpr int kWidth = 520, kHeight = 284;
+    static constexpr int kWidth = 520, kHeight = 300;
     explicit BuiltinView(PhyzoProcessor&);
     ~BuiltinView() override;
     void paint(juce::Graphics&) override;
