@@ -84,8 +84,10 @@ public:
     uint64_t reservedMacOps = 0, unknownSprReads = 0, unknownSprWrites = 0;
     uint32_t ramLow = 0xFFFFFFFF, ramHigh = 0;
     std::map<uint32_t, uint64_t> unmappedAddr;   // external addresses outside RAM and the voice port (first 64 kept)
-    std::map<uint32_t, uint64_t> satDest;        // saturated MAC/ALU results by destination register
-    std::map<uint32_t, double> satOver;          // largest overshoot beyond full scale per destination, in 24-bit output LSBs
+    static constexpr uint32_t kSatKeys = 0x1400;
+    // Saturated MAC/ALU results by destination: index = register (ALU), register | 0x1000 (MAC).
+    std::array<uint64_t, kSatKeys> satDest{};
+    std::array<double, kSatKeys> satOver{};      // largest overshoot beyond full scale per destination, in 24-bit output LSBs
     std::map<uint32_t, uint64_t> unknownSpr;     // accesses to SPR addresses not identified (address -> count)
     uint64_t satToDac = 0;                     // saturated MAC/ALU results written to SER 0x3EC/0x3ED
     int lastControl = -1;
@@ -110,6 +112,13 @@ public:
         int8_t macShift = 0;       // + = left
         bool hasIndirect = false;  // an operand field names INDIRECT/INDIRINC/INDIRDEC
         uint8_t fKind = 0;         // MAC destination: 0 ZERO (discarded), 1 plain, 2 side effects
+        // bind-time constants for stepT: MAC product factor (+2 / -2 for subtract), seed and output shifts as
+        // (left, right) pairs, AGEN region END register, +1 mode, BASE update, memory request
+        int8_t macMul = 2; uint8_t seedL = 0, seedR = 0, outL = 0, outR = 0;
+        uint16_t agEnd = 0; uint8_t agPlus = 0; bool agBase = false, agMem = false;
+        // specialised routine for this line (chosen in bind(); see stepT)
+        void (*run)(Esp2Core&, const Decoded&) = nullptr;
+        uint32_t (*aluFn)(Esp2Core&, const Decoded&, uint32_t, uint32_t, bool, bool&) = nullptr;
     };
     bool fastPath = true;                      // false: reference interpreter (stepRef), for A/B checks
 
@@ -121,7 +130,19 @@ private:
     void hostInstrCommand(uint8_t cmd);
     void decode(int addr);
     static void translate(Decoded& d);
+    static void bind(Decoded& d);
     inline void step();
+    template <int SK, int AG, int MAC, int ALU, int OP = -1> inline void stepT(const Decoded& d);
+    template <int SK, int AG, int MAC, int ALU, int OP = -1> static void runT(Esp2Core& c, const Decoded& d) { c.stepT<SK, AG, MAC, ALU, OP>(d); }
+    static void runStep(Esp2Core& c, const Decoded&);
+    static void runNop(Esp2Core& c, const Decoded&);
+    inline void next();                        // end of a line: count the cycle, continue with the next line's routine
+    uint64_t stop_ = 0;                        // runTo: the current chain of lines ends here (not state)
+    template <int OP> inline uint32_t aluFast(const Decoded& d, uint32_t ua, uint32_t ub, bool setFlags);
+    void aluSatCold(const Decoded& d, int64_t exact);
+    template <int OP> uint32_t aluT(const Decoded& d, uint32_t a, uint32_t b, bool setFlags, bool& write);
+    template <int OP> static uint32_t aluS(Esp2Core& c, const Decoded& d, uint32_t a, uint32_t b, bool f, bool& w) { return c.aluT<OP>(d, a, b, f, w); }
+    struct Binder;
     void stepRef();
     bool skip() const;
     uint32_t alu(const Decoded& d, uint32_t a, uint32_t b, bool setFlags, bool& write);
@@ -146,7 +167,7 @@ private:
     struct MemOp { bool valid = false, write = false; uint32_t addr = 0; int latch = 0; } memPend_;
     bool dilPend_ = false; int dilPendLatch_ = 0; uint32_t dilPendVal_ = 0;
     uint32_t memRead(uint32_t addr);
-    uint32_t dolTrunc(uint32_t v) const;
+    inline uint32_t dolTrunc(uint32_t v) const;
     uint32_t peekReg(uint32_t a) const;        // register value as the host or a program would read it (no side effects)
     // indirection: pointer histories implementing the patent's pointer latencies
     struct PtrWrite { uint64_t visible; uint32_t value; };

@@ -178,6 +178,7 @@ uint64_t esp2Hash(bool fast, double& ms, bool effect = false) {
         h ^= uint32_t(e.dacOut[0]); h *= 1099511628211ull; h ^= uint32_t(e.dacOut[1]); h *= 1099511628211ull;
     }
     ms = msSince(t0);
+    if (getenv("BENCH_STATS")) std::printf("  executed %llu, MAC saturations %llu, ALU saturations %llu\n", (unsigned long long)e.executed, (unsigned long long)e.macSat, (unsigned long long)e.aluSat);
     return h;
 }
 }  // namespace
