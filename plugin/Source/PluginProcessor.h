@@ -4,9 +4,13 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <array>
 #include <atomic>
+#include <map>
+#include <mutex>
+#include <string>
 #include <vector>
 #include "engine.h"
 #include "rom_id.h"
+#include "skin_port.h"
 
 class PhyzoProcessor : public juce::AudioProcessor, private juce::Timer {
 public:
@@ -41,6 +45,9 @@ public:
     Engine& engine() { return engine_; }
     const romid::ScanResult& romScan() const { return scan_; }
     juce::File romFolder() const { return dataFolder_.getChildFile("roms"); }
+    juce::File skinsFolder() const { return dataFolder_.getChildFile("skins"); }
+    // The synth as the skins see it (thread-safe: used by the skin render thread).
+    skin::PanelPort& panelPort() { return port_; }
     double hostRate() const { return hostRate_.load(); }
     bool showDebug = true;
 
@@ -53,10 +60,37 @@ public:
     } meter;
 
 private:
+    // Skin access to the engine, and the positions of the skin's knob elements (per element id; stacked knobs
+    // share a cc). The positions are the panel's physical state, saved with the project, never host parameters.
+    class Port : public skin::PanelPort {
+    public:
+        explicit Port(Engine& e) : engine(e) {}
+        void sendControl(int cc, int raw) override { engine.setControl(cc, raw); }
+        int controlPosition(int cc) override { return engine.controlPosition(cc); }
+        void sendButton(int raw, bool down) override { engine.pressRaw(raw, down); }
+        skin::LedReport led(int code) override {
+            const Engine::LedInfo i = engine.led(code);
+            return {skin::LedMode(i.mode), i.beats, i.beatIntervalMs};
+        }
+        std::array<uint8_t, 4> segments() override { return engine.segments(); }
+        bool knobPosition(const std::string& id, int& raw) override {
+            std::lock_guard<std::mutex> lk(mtx);
+            auto it = knobs.find(id);
+            if (it == knobs.end()) return false;
+            raw = it->second;
+            return true;
+        }
+        void setKnobPosition(const std::string& id, int raw) override { std::lock_guard<std::mutex> lk(mtx); knobs[id] = raw; }
+        Engine& engine;
+        std::mutex mtx;
+        std::map<std::string, int> knobs;
+    };
+
     void timerCallback() override;
     void scanRoms();
 
     Engine engine_;
+    Port port_{engine_};
     juce::File dataFolder_;
     romid::ScanResult scan_;
     int timerTicks_ = 0;

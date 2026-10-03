@@ -4,7 +4,7 @@
 
 namespace {
 constexpr uint32_t kStateMagic = 0x505A4850;     // "PHZP" (little-endian)
-constexpr uint32_t kStateVersion = 1;
+constexpr uint32_t kStateVersion = 2;          // 2: + skin knob positions (1 is still read)
 constexpr int kTimerMs = 100, kScanEveryTicks = 20;   // rescan the ROM folder every 2 s while something is missing
 }
 
@@ -74,7 +74,8 @@ void PhyzoProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
 
 juce::AudioProcessorEditor* PhyzoProcessor::createEditor() { return new PhyzoEditor(*this); }
 
-// State: magic, version, UI flags, then the engine state (complete machine), gzip-compressed.
+// State: magic, version, UI flags, the engine state (complete machine, gzip-compressed), then the skin's knob
+// element positions (count, then id and raw for each).
 void PhyzoProcessor::getStateInformation(juce::MemoryBlock& dest) {
     const std::vector<uint8_t> engineState = engine_.getState();
     juce::MemoryOutputStream out(dest, false);
@@ -90,11 +91,16 @@ void PhyzoProcessor::getStateInformation(juce::MemoryBlock& dest) {
     out.writeInt64(juce::int64(engineState.size()));
     out.writeInt64(juce::int64(packed.getSize()));
     out.write(packed.getData(), packed.getSize());
+    std::lock_guard<std::mutex> lk(port_.mtx);
+    out.writeInt(int(port_.knobs.size()));
+    for (const auto& kv : port_.knobs) { out.writeString(juce::String::fromUTF8(kv.first.c_str())); out.writeInt(kv.second); }
 }
 
 void PhyzoProcessor::setStateInformation(const void* data, int size) {
     juce::MemoryInputStream in(data, size_t(size), false);
-    if (uint32_t(in.readInt()) != kStateMagic || in.readInt() != int(kStateVersion)) return;
+    if (uint32_t(in.readInt()) != kStateMagic) return;
+    const int version = in.readInt();
+    if (version < 1 || version > int(kStateVersion)) return;
     showDebug = in.readInt() != 0;
     const juce::int64 rawSize = in.readInt64(), packedSize = in.readInt64();
     if (rawSize <= 0 || rawSize > (juce::int64(256) << 20) || packedSize <= 0 || packedSize > in.getNumBytesRemaining()) return;
@@ -104,6 +110,15 @@ void PhyzoProcessor::setStateInformation(const void* data, int size) {
     juce::GZIPDecompressorInputStream gz(packedIn);
     std::vector<uint8_t> engineState(static_cast<size_t>(rawSize));
     if (gz.read(engineState.data(), int(rawSize)) != int(rawSize)) return;
+    std::map<std::string, int> knobs;
+    if (version >= 2) {
+        const int n = in.readInt();
+        for (int i = 0; i < n && i < 4096 && !in.isExhausted(); ++i) {
+            const juce::String id = in.readString();
+            knobs[id.toStdString()] = juce::jlimit(0, 1023, in.readInt());
+        }
+    }
+    { std::lock_guard<std::mutex> lk(port_.mtx); port_.knobs = std::move(knobs); }
     engine_.setState(engineState);
 }
 

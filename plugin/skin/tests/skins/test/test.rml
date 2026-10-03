@@ -1,0 +1,23 @@
+<rml>
+<head>
+	<title>Phyzo test skin</title>
+	<link type="text/rcss" href="test.rcss"/>
+	<script src="test.lua"></script>
+</head>
+<body onload="onLoad()" onframe="onFrame()">
+	<knob id="vol" cc="11"/>
+	<knob id="envA" cc="3" class="stack"/>
+	<knob id="envB" cc="3" class="stack hidden"/>
+	<pbutton id="bEnv" raw="0x12" led="0x20"/>
+	<pbutton id="bPlain" raw="0x13"/>
+	<led id="ledOn" code="0x21"/>
+	<led id="ledFlash" code="0x22"/>
+	<led id="ledBeat" code="0x23"/>
+	<led id="clip" source="audioclip"/>
+	<vfdigit id="d0" pos="0"/>
+	<vfdigit id="d1" pos="1"/>
+	<vfdigit id="d2" pos="2"/>
+	<vfdigit id="d3" pos="3"/>
+	<div id="shown" onshow="shownCount = (shownCount or 0) + 1"/>
+</body>
+</rml>

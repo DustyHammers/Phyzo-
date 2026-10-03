@@ -1,3 +1,4 @@
+#include <array>
 // Panel model test (no ROM data): the answer to the OS's F4 request (docs/PANEL_CONTROLS.md, F-02), knob moves,
 // and the control positions in the saved state.
 #include <cstdio>
@@ -70,6 +71,22 @@ int main() {
     off.sendToOs = [&](const std::vector<uint8_t>& b, uint64_t when) { sent.push_back({b, when}); };
     off.onOsByte(0xF4, 0);
     CHECK(sent.empty());
+
+    // LED messages reach onLed: 91 code (on), 92 code (flash), 9D code rate (beat flash).
+    {
+        PanelModel q;
+        std::vector<std::array<int, 3>> seen;
+        q.onLed = [&](uint8_t st, uint8_t code, uint8_t rate, uint64_t) { seen.push_back({st, code, rate}); };
+        for (uint8_t b : {0x91, 0x12, 0x92, 0x13, 0x9D, 0x14, 0x40, 0x90, 0x12}) q.onOsByte(b, 0);
+        CHECK(seen.size() == 4);
+        if (seen.size() == 4) {
+            CHECK((seen[0] == std::array<int, 3>{0x91, 0x12, 0}));
+            CHECK((seen[1] == std::array<int, 3>{0x92, 0x13, 0}));
+            CHECK((seen[2] == std::array<int, 3>{0x9D, 0x14, 0x40}));
+            CHECK((seen[3] == std::array<int, 3>{0x90, 0x12, 0}));
+        }
+        CHECK(q.ledState[0x12] == 0 && q.ledState[0x13] == 2 && q.ledState[0x14] == 2);
+    }
 
     std::printf("panel_test: %s\n", failures ? "FAILED" : "passed");
     return failures ? 1 : 0;

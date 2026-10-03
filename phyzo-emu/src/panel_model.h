@@ -52,6 +52,9 @@ public:
     // A control moved: store the position and send one Bx cc vv with the new absolute value.
     void moveControl(int cc, int raw, uint64_t cycle);
 
+    // Called for every LED message from the OS (status 90-92 and 9C/9E-9F: code; 9D: code and rate).
+    std::function<void(uint8_t status, uint8_t code, uint8_t rate, uint64_t cycle)> onLed;
+
     void onOsByte(uint8_t b, uint64_t cycle);
     void onResetPin(bool asserted, uint64_t cycle);
     void inject(const std::vector<uint8_t>& bytes, uint64_t cycle, const std::string& note);

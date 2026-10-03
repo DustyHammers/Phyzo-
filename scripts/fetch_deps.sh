@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fetches the pinned dependencies from scripts/deps.env into work/deps/ (repository root).
-# Usage: scripts/fetch_deps.sh [musashi] [juce]   (no arguments: both)
+# Usage: scripts/fetch_deps.sh [musashi] [juce] [rmlui] [lua] [freetype]   (no arguments: all)
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=deps.env
@@ -20,11 +20,14 @@ fetch() {   # name url commit
     echo "$1: $commit"
 }
 
-want="${*:-musashi juce}"
+want="${*:-musashi juce rmlui lua freetype}"
 for d in $want; do
     case "$d" in
         musashi) fetch Musashi "$MUSASHI_URL" "$MUSASHI_COMMIT" ;;
         juce)    fetch JUCE "$JUCE_URL" "$JUCE_COMMIT" ;;
+        rmlui)   fetch RmlUi "$RMLUI_URL" "$RMLUI_COMMIT" ;;
+        lua)     fetch Lua "$LUA_URL" "$LUA_COMMIT" ;;
+        freetype) fetch FreeType "$FREETYPE_URL" "$FREETYPE_COMMIT" ;;
         *) echo "unknown dependency $d" >&2; exit 2 ;;
     esac
 done

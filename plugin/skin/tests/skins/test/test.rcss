@@ -1,0 +1,25 @@
+/* Test skin: plain coloured boxes, no images. Positions are what skin_test clicks on (1 dp = 1 px at ratio 1). */
+body { width: 1795dp; height: 848dp; background-color: #202020; }
+knob, pbutton, led, vfdigit, div { display: block; position: absolute; }
+knob { width: 100dp; height: 100dp; top: 0dp; background-color: #604080; frames: 61; spriteprefix: knob_; }
+#vol { left: 0dp; }
+#envA, #envB { left: 200dp; }
+.hidden { display: none; }
+pbutton { width: 80dp; height: 40dp; top: 200dp; background-color: #803030; }
+pbutton.pressed { background-color: #c04040; }
+pbutton.held { background-color: #f06060; }
+pbutton.lit { border: 2dp #ff3020; }
+#bEnv { left: 0dp; }
+#bPlain { left: 100dp; }
+led { width: 10dp; height: 10dp; top: 300dp; background-color: #301010; }
+led.lit { background-color: #ff3020; }
+#ledOn { left: 0dp; }
+#ledFlash { left: 20dp; }
+#ledBeat { left: 40dp; }
+#clip { left: 60dp; }
+vfdigit { width: 30dp; height: 50dp; top: 400dp; background-color: #101010; spriteprefix: vfd_; }
+#d0 { left: 0dp; }
+#d1 { left: 40dp; }
+#d2 { left: 80dp; }
+#d3 { left: 120dp; }
+#shown { left: 0dp; top: 500dp; width: 10dp; height: 10dp; }

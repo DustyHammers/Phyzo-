@@ -11,10 +11,11 @@ recordings or renders (checked: no data files, nothing over 200 KB, no embedded 
 | `tools/rombuilder/docs/NATIVE_IMAGE.md` | How the native wave image is built from the OS tables | — |
 | `tools/esp2obj_parser.py` | Parser for ESP2 effect-program objects (format logic from the public spec) | — |
 | `tools/analysis/filter_fit/`, `tools/analysis/filter_validation/` | Resonant-filter fitting and held-out validation scripts | — |
-| `plugin/` | JUCE plugin (VST3 + AU): the emulator as an instrument, temporary editor until the skin (Phase 4) | 0.3.0 |
+| `plugin/` | JUCE plugin (VST3 + AU): the emulator as an instrument, with the skin engine (`plugin/skin/`: RmlUi + Lua) and the Built-in skin | 0.4.0 |
 | `scripts/` | Pinned dependencies and fetch script, data-file guard, plugin identity check | — |
 | `.github/workflows/ci.yml` | CI: data guard, ROM-free tests (Linux), macOS plugin build | — |
 | `docs/INSTALL_MAC.md` | Downloading a build and installing it on the Mac | — |
+| `docs/SKINS.md` | Writing a skin (elements, RCSS properties, Lua API); skins themselves are never in the repo | — |
 
 Runtime: the plugin and tools load the two ROM files from the user's machine (see the private repo's `ROMs/`).
 
