@@ -754,7 +754,7 @@ __attribute__((always_inline)) inline uint32_t Esp2Core::aluFast(const Decoded& 
         const bool v = exact > 0x7FFFFF || exact < -0x800000;
         res = uint32_t(exact) & 0xFFFFFF;
         const bool nprime = res & 0x800000;
-        if ((OP == 0x00 || OP == 0x03 || OP == 0x1A) && v) [[unlikely]] { aluSatCold(d, exact); res = exact > 0 ? 0x7FFFFF : 0x800000; }
+        if (__builtin_expect((OP == 0x00 || OP == 0x03 || OP == 0x1A) && v, 0)) { aluSatCold(d, exact); res = exact > 0 ? 0x7FFFFF : 0x800000; }
         fl = (carry ? F_C : 0) | (v ? F_V : 0) | ((nprime ^ v) ? F_LT : 0);
     } else if constexpr (OP == 0x0D) {
         res = uint32_t((int64_t(a) + b) >> 1) & 0xFFFFFF;

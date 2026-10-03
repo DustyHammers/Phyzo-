@@ -205,8 +205,15 @@ scheduling noise; the lock wait is the part the engine controls.
 
     build/speed_bench            # all parts
     build/speed_bench effect     # only the ESP2 core on the effect-like program
+    build/speed_bench multi [S]  # 1, 2 and 3 instances at once, S seconds each (default 5)
 
 Host milliseconds per second of 44.1 kHz audio (1000 = one core in real time) for: the ESP2 core on an effect-like
 program and on a busy random program (fast path and reference interpreter, with output hashes that must not change
 with speed work), the voice chip with 32 voices, and the 68k with the machine. In the plugin, the debug overlay shows
 the same split measured on the real OS and presets.
+
+`multi` runs 1, 2 and 3 machines on their own threads at once, paced as a host at 48 kHz with blocks of 512 and 128
+samples; each has a 68k busy loop, 32 voices and the effect-like ESP2 program. Prints CPU per instance (average and
+peak block, in % of the block period), the worst block and the overruns. Instances share one 68k core (Musashi has a
+single global CPU): only 68k slices take turns on it, under a lock held for at most one sample period; each machine's
+timers, serial channels, voice chip and ESP2 run outside it, in parallel with the other instances.
