@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
     struct EspSnap { uint64_t macSat, aluSat, satDac, dacSat, portClips, overruns, unmapped, executed, suspended; };
     auto snap = [&]() { return EspSnap{m.esp2.macSat, m.esp2.aluSat, m.esp2.satToDac, m.esp2.dacSatSamples, m.voicePortClips, m.esp2.overruns, m.esp2.memUnmapped, m.esp2.executed, m.esp2.suspendedCycles}; };
     EspSnap e0 = snap();
-    std::map<uint32_t, uint64_t> sat0 = m.esp2.satDest;
+    auto sat0 = m.esp2.satDest;
     std::map<uint32_t, double> over0;
     FILE* clip = std::fopen((out + "/clip_report.csv").c_str(), "w");
     if (clip) std::fprintf(clip, "recording,seconds,dry_peak_dbfs,dry_over_20bit,voice_port_clamped_words,wet_peak_dbfs,wet_rms_dbfs,dac_fullscale_samples,esp2_mac_saturations,esp2_alu_saturations,saturated_writes_to_dac_regs,esp2_overruns,esp2_unmapped_mem,esp2_load_pct,saturations_by_destination\n");
@@ -174,9 +174,9 @@ int main(int argc, char** argv) {
             writeWavDac(out + "/" + recName + "_wet.wav", w);
             EspSnap e1 = snap();
             std::string satBy;                     // saturations in this recording by destination register
-            for (auto& kv : m.esp2.satDest) {
-                uint64_t n0 = sat0.count(kv.first) ? sat0[kv.first] : 0;
-                if (kv.second > n0) { char b[64]; std::snprintf(b, sizeof b, "%s%s%03X:%llu:%.3g", satBy.empty() ? "" : " ", (kv.first & 0x1000) ? "MAC>" : "ALU>", kv.first & 0x3FF, (unsigned long long)(kv.second - n0), m.esp2.satOver[kv.first]); satBy += b; }
+            for (uint32_t k = 0; k < Esp2Core::kSatKeys; ++k) {
+                const uint64_t n0 = sat0[k], n = m.esp2.satDest[k];
+                if (n > n0) { char b[64]; std::snprintf(b, sizeof b, "%s%s%03X:%llu:%.3g", satBy.empty() ? "" : " ", (k & 0x1000) ? "MAC>" : "ALU>", k & 0x3FF, (unsigned long long)(n - n0), m.esp2.satOver[k]); satBy += b; }
             }
             double load = e1.executed > e0.executed ? 100.0 * double(e1.executed - e0.executed) / double(e1.executed - e0.executed + e1.suspended - e0.suspended) : 0;
             auto db = [](double v, double fs) { return v > 0 ? 20 * std::log10(v / fs) : -999.0; };
@@ -213,7 +213,7 @@ int main(int argc, char** argv) {
                     if (ok) both(" %08X", a);
                 }
                 both("%s", "\n");
-            } else if (e.cmd == "rec") { stopRec(); recName = e.args.at(0); m.captureAudio = true; recStart = m.audio.size(); recHost = recEmu = 0; l5Start = m.irqTaken[5]; resStart = m.voice.resonantSamples; clampStart = m.voice.stateClamps; m.wet.clear(); e0 = snap(); sat0 = m.esp2.satDest; m.esp2.satOver.clear(); }
+            } else if (e.cmd == "rec") { stopRec(); recName = e.args.at(0); m.captureAudio = true; recStart = m.audio.size(); recHost = recEmu = 0; l5Start = m.irqTaken[5]; resStart = m.voice.resonantSamples; clampStart = m.voice.stateClamps; m.wet.clear(); e0 = snap(); sat0 = m.esp2.satDest; m.esp2.satOver.fill(0); }
             else if (e.cmd == "stop") stopRec();
             else if (e.cmd == "display") both("display %.0f ms: \"%s\"  %s\n", e.t, m.panel.text().c_str(), e.args.empty() ? "" : e.args[0].c_str());
             else if (e.cmd == "esp2epoch") { ++m.esp2.epoch; if (e.args.size() >= 2) { m.esp2.staleWinLo = uint32_t(std::strtoul(e.args[0].c_str(), nullptr, 16)); m.esp2.staleWinHi = uint32_t(std::strtoul(e.args[1].c_str(), nullptr, 16)); } both("esp2epoch %.0f ms: %u\n", e.t, m.esp2.epoch); }
@@ -271,7 +271,7 @@ int main(int argc, char** argv) {
              e.ramLow, e.ramHigh, (unsigned long long)e.voicePortReads, (unsigned long long)e.voicePortWrites, (unsigned long long)e.reservedMacOps,
              (unsigned long long)e.unknownSprReads, (unsigned long long)e.unknownSprWrites);
         both("%s", "esp2_unmapped_addresses:"); for (auto& kv : e.unmappedAddr) both(" %c%06X x%llu", (kv.first & 0x80000000u) ? 'W' : 'R', kv.first & 0xFFFFFF, (unsigned long long)kv.second); both("%s", "\n");
-        both("%s", "esp2_saturations_by_dest:"); for (auto& kv : e.satDest) both(" %s%03X x%llu", (kv.first & 0x1000) ? "MAC>" : "ALU>", kv.first & 0x3FF, (unsigned long long)kv.second); both("%s", "\n");
+        both("%s", "esp2_saturations_by_dest:"); for (uint32_t k = 0; k < Esp2Core::kSatKeys; ++k) if (e.satDest[k]) both(" %s%03X x%llu", (k & 0x1000) ? "MAC>" : "ALU>", k & 0x3FF, (unsigned long long)e.satDest[k]); both("%s", "\n");
         both("%s", "esp2_unknown_spr:"); for (auto& kv : e.unknownSpr) both(" %s%03X x%llu", (kv.first & 0x1000) ? "W" : "R", kv.first & 0x3FF, (unsigned long long)kv.second); both("%s", "\n");
         both("voice: bad_channel_codes %llu, voice_port_clamped_words %llu\n", (unsigned long long)m.voice.badChannel, (unsigned long long)m.voicePortClips);
     }

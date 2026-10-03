@@ -9,7 +9,10 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <algorithm>
+#include <atomic>
 #include <string>
+#include <thread>
 #include <vector>
 #include "esp2_core.h"
 #include "machine.h"
@@ -178,12 +181,89 @@ uint64_t esp2Hash(bool fast, double& ms, bool effect = false) {
         h ^= uint32_t(e.dacOut[0]); h *= 1099511628211ull; h ^= uint32_t(e.dacOut[1]); h *= 1099511628211ull;
     }
     ms = msSince(t0);
+    if (getenv("BENCH_STATS")) std::printf("  executed %llu, MAC saturations %llu, ALU saturations %llu\n", (unsigned long long)e.executed, (unsigned long long)e.macSat, (unsigned long long)e.aluSat);
     return h;
+}
+// ---- several instances at once, paced as a host: N machines on N threads, each with a 68k busy loop, the effect-like
+// ESP2 program and 32 voices, processing blocks of `block` host samples at `rate` (machine at 44.1 kHz).
+struct MultiResult { double meanPct = 0, peakPct = 0, worstMs = 0; long blocks = 0, overruns = 0; };
+
+void loadVoices(VoiceCore& c) {
+    using namespace v;
+    Chip k;
+    c.setBank(2, syntheticBank());
+    auto reg = [&](int voice, uint32_t r, uint32_t val) { c.write(0x7C, uint32_t(voice), 4); c.write(r, val, 4); };
+    c.write(0x6C, 31, 4);
+    const uint32_t modes[] = {0x000, 0x100, 0x200, 0x300, 0x500, 0x600, 0x700};
+    for (int i = 0; i < 32; ++i) {
+        reg(i, 0x08, 0xC000); reg(i, 0x10, 0xC000); reg(i, 0x24, 0x4000); reg(i, 0x1C, 0x3000);
+        reg(i, 0x48, (0x020u << 9) | 0x013); reg(i, 0x18, 0x1FF);
+        reg(i, 0x2C, kBank2 + 1000u * uint32_t(i)); reg(i, 0x30, kBank2 + 1000u * uint32_t(i) + 900); reg(i, 0x38, kBank2 + 1000u * uint32_t(i));
+        reg(i, 0x04, 1500 + 37 * uint32_t(i)); reg(i, 0x00, modes[i % 7] | 0x0008 | uint32_t(i % 10) << 12);
+    }
+}
+
+std::vector<MultiResult> multi(int instances, double rate, int block, double seconds) {
+    OsImage os; os.bytes.assign(0x1000, 0);
+    const uint16_t prog[] = {0x2200, 0x5281, 0x0C81, 0x0000, 0xFFFF, 0x66F6, 0x60F2};
+    for (size_t i = 0; i < sizeof prog / 2; ++i) { os.bytes[0x80 + 2 * i] = uint8_t(prog[i] >> 8); os.bytes[0x81 + 2 * i] = uint8_t(prog[i]); }
+    std::vector<std::unique_ptr<Machine>> ms;
+    for (int n = 0; n < instances; ++n) {
+        auto m = std::make_unique<Machine>(); Machine::Config cfg; std::string err;
+        m->init(os, cfg, err);
+        Rng r{12345};
+        std::vector<Line> body;
+        for (int i = 0; i < 180; ++i) body.push_back(effectLine(r, i));
+        setup(m->esp2, harness(body), r, false);
+        loadVoices(m->voice);
+        m->runUntil(m->cyclesFromMs(50));                // settle
+        ms.push_back(std::move(m));
+    }
+    std::vector<MultiResult> res(static_cast<size_t>(instances));
+    std::atomic<int> ready{0};
+    std::vector<std::thread> th;
+    for (int n = 0; n < instances; ++n)
+        th.emplace_back([&, n] {
+            Machine& m = *ms[size_t(n)];
+            MultiResult& out = res[size_t(n)];
+            const double period = block / rate;
+            const uint64_t s0 = uint64_t(double(m.cycles()) / m.cyclesFromMs(1000) * 44100.0) + 1;
+            ++ready; while (ready < instances) std::this_thread::yield();
+            auto next = Clock::now();
+            double total = 0;
+            for (long b = 0; b < long(seconds / period); ++b) {
+                const auto t0 = Clock::now();
+                const uint64_t target = s0 + uint64_t(double(b + 1) * block * 44100.0 / rate);
+                m.runUntil(std::max(m.cycles() + 1, m.cycleOfSample(target)));
+                const double dt = std::chrono::duration<double>(Clock::now() - t0).count();
+                total += dt; ++out.blocks;
+                out.peakPct = std::max(out.peakPct, 100.0 * dt / period);
+                out.worstMs = std::max(out.worstMs, dt * 1000.0);
+                if (dt > period) ++out.overruns;
+                next += std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(period));
+                std::this_thread::sleep_until(next);
+            }
+            out.meanPct = 100.0 * total / (double(out.blocks) * period);
+        });
+    for (auto& t : th) t.join();
+    return res;
 }
 }  // namespace
 
 int main(int argc, char** argv) {
     double ms = 0;
+    if (argc > 1 && std::strcmp(argv[1], "multi") == 0) {
+        const double secs = argc > 2 ? std::atof(argv[2]) : 5.0;
+        std::printf("instances  block   CPU per instance avg / peak block    worst block     overruns (blocks)\n");
+        for (int block : {512, 128})
+            for (int n = 1; n <= 3; ++n) {
+                const auto r = multi(n, 48000.0, block, secs);
+                double mean = 0, peak = 0, worst = 0; long over = 0, blocks = 0;
+                for (const auto& x : r) { mean += x.meanPct / n; peak = std::max(peak, x.peakPct); worst = std::max(worst, x.worstMs); over += x.overruns; blocks += x.blocks; }
+                std::printf("%9d  %5d   %6.1f %% / %6.1f %%                %6.2f ms       %ld of %ld\n", n, block, mean, peak, worst, over, blocks);
+            }
+        return 0;
+    }
     const bool effOnly = argc > 1 && std::strcmp(argv[1], "effect") == 0;
     if (effOnly || argc == 1) {
         const uint64_t he = esp2Hash(true, ms, true);

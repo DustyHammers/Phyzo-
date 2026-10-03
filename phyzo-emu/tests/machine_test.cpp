@@ -2,6 +2,7 @@
 // the CPU core (Musashi), RAM, serial channel B in both directions (the MIDI port) and the hard-stall detector.
 #include <cstdio>
 #include <string>
+#include <thread>
 #include <vector>
 #include "machine.h"
 #include "os_image.h"
@@ -24,7 +25,52 @@ const uint16_t kProgram[] = {
     0x1239, 0x00F0, 0x071B,             // 40AC move.b $F0071B,d1      read it
     0x13C1, 0x0BE0, 0x0200,             // 40B2 move.b d1,$0BE00200    store it
     0x60FE};                            // 40B8 bra    *
+
+// Interrupt program: serial channel B receive interrupts (level 4, vector $40) through a vector table in RAM; the
+// handler counts the bytes. Main loops counting in d2. Interrupts are raised while the devices advance (outside the
+// CPU lock), which is the case the threaded test below covers.
+const uint16_t kIrqMain[] = {
+    0x203C, 0x0BE1, 0x0000,             // 4080 move.l #$0BE10000,d0
+    0x4E7B, 0x0801,                     // 4086 movec  d0,vbr
+    0x23FC, 0x0000, 0x4100, 0x0BE1, 0x0100,   // 408A move.l #$4100,$0BE10100   vector $40 -> handler
+    0x13FC, 0x0004, 0x00F0, 0x0704,     // 4094 move.b #4,$F00704       serial ILR = 4
+    0x13FC, 0x0040, 0x00F0, 0x0705,     // 409C move.b #$40,$F00705     IVR = $40
+    0x13FC, 0x0020, 0x00F0, 0x0715,     // 40A4 move.b #$20,$F00715     IER = RxRDYB
+    0x13FC, 0x0005, 0x00F0, 0x071A,     // 40AC move.b #5,$F0071A       channel B on
+    0x46FC, 0x2000,                     // 40B4 move.w #$2000,sr
+    0x5282,                             // 40B8 addq.l #1,d2
+    0x23C2, 0x0BE0, 0x0300,             // 40BA move.l d2,$0BE00300
+    0x60F6};                            // 40C0 bra    $40B8
+const uint16_t kIrqHandler[] = {
+    0x1239, 0x00F0, 0x071B,             // 4100 move.b $F0071B,d1
+    0x52B9, 0x0BE0, 0x0400,             // 4106 addq.l #1,$0BE00400
+    0x13C1, 0x0BE0, 0x0500,             // 410C move.b d1,$0BE00500
+    0x4E73};                            // 4112 rte
 }  // namespace
+
+OsImage irqOs() {
+    OsImage os;
+    os.bytes.assign(0x1000, 0);
+    auto put = [&](size_t off, const uint16_t* w, size_t n) {
+        for (size_t i = 0; i < n; ++i) { os.bytes[off + 2 * i] = uint8_t(w[i] >> 8); os.bytes[off + 2 * i + 1] = uint8_t(w[i]); }
+    };
+    put(0x80, kIrqMain, sizeof kIrqMain / 2);
+    put(0x100, kIrqHandler, sizeof kIrqHandler / 2);
+    return os;
+}
+
+// The interrupt program with 60 received bytes, in steps of varying length. Returns the final state.
+std::vector<uint8_t> runIrq(const OsImage& os, int& handled) {
+    Machine m; Machine::Config cfg; std::string err;
+    m.init(os, cfg, err);
+    for (int i = 0; i < 300; ++i) {
+        if (i % 5 == 2) m.serial.queueRx(1, {uint8_t(i)}, m.cycles() + uint64_t(31 * i));
+        m.runUntil(m.cycles() + 900 + 53 * uint64_t(i % 17));
+    }
+    m.runUntil(m.cycles() + m.cyclesFromMs(2));
+    handled = int(m.peek(0x0BE00400, 4));
+    return m.saveState();
+}
 
 OsImage syntheticOs() {
     OsImage os;
@@ -103,6 +149,25 @@ int main() {
         }
         const auto endY = runToEnd(y), endX = runToEnd(x);
         CHECK(endX == endSolo && endY == endSolo);
+    }
+
+    // Instances on several threads at once: each machine's devices run outside the CPU lock, in parallel with the
+    // other machines; only 68k slices take turns. Interrupts raised by a device step reach the CPU under the lock.
+    // Every machine must end exactly as one that ran alone.
+    {
+        const OsImage io = irqOs();
+        int soloHandled = 0;
+        const auto solo = runIrq(io, soloHandled);
+        CHECK(soloHandled == 60);
+        constexpr int kThreads = 3, kRounds = 4;
+        std::vector<int> bad(kThreads, 0);
+        std::vector<std::thread> threads;
+        for (int t = 0; t < kThreads; ++t)
+            threads.emplace_back([&, t] {
+                for (int k = 0; k < kRounds; ++k) { int h = 0; if (runIrq(io, h) != solo || h != 60) ++bad[size_t(t)]; }
+            });
+        for (auto& th : threads) th.join();
+        for (int t = 0; t < kThreads; ++t) CHECK(bad[size_t(t)] == 0);
     }
 
     std::printf("machine_test: %s\n", failures ? "FAILED" : "passed");

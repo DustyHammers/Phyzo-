@@ -52,7 +52,8 @@ owner step by step through anything they must do by hand on github.com or on the
 - Plugin architecture: `phyzo-emu/src/engine.*` (no JUCE) runs the machine per host block, boots/restores on a worker
   thread, delivers MIDI sample-accurately with a constant reported latency, and converts 44.1 kHz to the host rate
   (`resampler.*`). `plugin/` wraps it (JUCE) and scans `~/Documents/Phyzo/roms/`. Musashi has one global CPU:
-  machines take turns under a lock (`Machine::becomeCpuOwner`). Project state = complete machine state
+  machines take turns on it per 68k slice under a lock (`Machine::becomeCpuOwner`); each machine's devices (timers,
+  serial, voice chip, ESP2) run outside the lock, in parallel across instances. Project state = complete machine state
   (`Machine::saveState`), tied to the ROM checksums.
 - Skins: `plugin/skin/` (no JUCE) is the runtime: RmlUi 6.3 + Lua 5.4 (sandboxed, 3 s limit) + FreeType, the custom
   elements knob/pbutton/led/vfdigit and the `panel`/`plugin` Lua API; `skin_test` drives the test skin in CI.

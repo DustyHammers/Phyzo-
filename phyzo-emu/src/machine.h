@@ -91,6 +91,7 @@ public:
     void syncEsp2();                     // run the ESP2 up to the current CPU time
     bool profile = false;                // time the voice core and the ESP2 separately (host seconds)
     double profVoice = 0, profEsp2 = 0;
+    double profCpuWait = 0;              // waiting for the shared CPU lock (other instances running 68k code)
     VoiceCore voice;
     // audio: one stereo frame per voice-chip sample (44.1 kHz), 20-bit values
     bool captureAudio = false;
@@ -142,6 +143,8 @@ private:
     uint64_t voiceSamples_ = 0, nextSample_ = 0;
     uint64_t sampleCycle(uint64_t n) const { return uint64_t(double(n) * cfg_.cpuHz / VoiceCore::kOutputRate); }
     bool inExecute_ = false, inDma_ = false;
+    bool cpuHeld_ = false;               // this machine holds the CPU lock (set by CpuLock)
+    friend struct CpuLock;
     int irqLevel_ = 0;
     // hard-stall detector
     uint64_t windowStart_ = 0, windowSamples_ = 0, windowAtBra_ = 0;

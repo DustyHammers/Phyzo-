@@ -1,5 +1,6 @@
 #include "esp2_core.h"
 #include <algorithm>
+#include <utility>
 
 // SPR addresses used by this core. The spec sections that list SPR addresses were not available; each address
 // below was derived from how the loaded programs use it (ESP2_REPORT.md, "SPR map"). Tags: K = fixed by the spec's
@@ -179,7 +180,7 @@ void Esp2Core::writeReg(uint32_t a, uint32_t v) {
 
 // Magnitude truncation of WR data (HARD_CONF MAG_TRUNC, TRUNC_WIDTH; patent "Data Interface"): negative values move one
 // LSB toward zero, then 16-bit mode clears the 8 LSBs. Both the OS (0x881C) and the programs (0x8C08) select 16 bits.
-uint32_t Esp2Core::dolTrunc(uint32_t v) const {
+inline uint32_t Esp2Core::dolTrunc(uint32_t v) const {
     if (ram16 && !specFixes) return v & 0xFFFF00;
     if (!specFixes || !(r_[spr::HARD_CONF] & 0x800)) return v;
     const bool neg = v & 0x800000;
@@ -227,6 +228,7 @@ void Esp2Core::decode(int a) {
     d.G = uint16_t(((lo >> 11) & 0x1FF) | 0x200); d.ag = uint8_t((lo >> 8) & 7); d.rgn = uint8_t((lo >> 5) & 7);
     d.dl = uint8_t((lo >> 1) & 0xF); d.agSkip = lo & 1;
     translate(d);
+    bind(d);
 }
 
 // Plain operands read and write r_[] directly with no side effect (everything readReg/writeReg does not special-case).
@@ -392,7 +394,8 @@ bool Esp2Core::skip() const {
     return (cmr_ & 0x200) ? !t : t;
 }
 
-uint32_t Esp2Core::alu(const Decoded& d, uint32_t ua, uint32_t ub, bool setFlags, bool& write) {
+template <int OP>
+uint32_t Esp2Core::aluT(const Decoded& d, uint32_t ua, uint32_t ub, bool setFlags, bool& write) {
     const int32_t a = sx24(ua), b = sx24(ub);
     uint32_t res = 0, fl = ccr_ & 0x7F, keep = 0x7F;     // keep: flags left alone
     bool sat = false;
@@ -408,7 +411,7 @@ uint32_t Esp2Core::alu(const Decoded& d, uint32_t ua, uint32_t ub, bool setFlags
     auto signsAB = [&]() { fl = (fl & ~(F_NA | F_NB)) | (a < 0 ? F_NA : 0) | (b < 0 ? F_NB : 0); };
     const uint32_t cin = (ccr_ & F_C) ? 1 : 0;
     write = true;
-    switch (d.alu) {
+    switch (OP) {
     case 0x00: arith(int64_t(a) + b, ((ua + ub) >> 24) & 1, true); signsAB(); break;                    // ADD
     case 0x01: arith(int64_t(a) + b, ((ua + ub) >> 24) & 1, false); signsAB(); break;                   // ADDV
     case 0x02: arith(int64_t(a) + b + cin, ((ua + ub + cin) >> 24) & 1, true); signsAB(); break;        // ADDC
@@ -418,11 +421,11 @@ uint32_t Esp2Core::alu(const Decoded& d, uint32_t ua, uint32_t ub, bool setFlags
     case 0x1A: arith(int64_t(a) - b, ua < ub, true); signsAB(); break;                                  // SUBREV
     case 0x06: case 0x07: {                                                                              // MAX, MIN
         arith(int64_t(a) - b, ua < ub, false);
-        res = (d.alu == 0x06) == (a >= b) ? ua : ub;
+        res = (OP == 0x06) == (a >= b) ? ua : ub;
         fl = (fl & ~F_Z) | (a == b ? F_Z : 0); signsAB(); break;
     }
     case 0x08: case 0x09: case 0x0A:                                                                     // AND OR XOR
-        res = d.alu == 0x08 ? (ua & ub) : d.alu == 0x09 ? (ua | ub) : (ua ^ ub);
+        res = OP == 0x08 ? (ua & ub) : OP == 0x09 ? (ua | ub) : (ua ^ ub);
         fl = (fl & (F_C | F_V | F_LT)) | ((res & 0x800000) ? F_N : 0) | (res ? 0 : F_Z); signsAB(); break;
     case 0x0B: case 0x18: case 0x19: case 0x1B: case 0x1E: res = ub; setFlags = false; break;          // MOV HOST BIOZ MOVcc RScc
     case 0x0C:                                                                                           // RECT
@@ -440,7 +443,7 @@ uint32_t Esp2Core::alu(const Decoded& d, uint32_t ua, uint32_t ub, bool setFlags
         fl = (fl & ~(F_N | F_Z)) | (neg ? F_N : 0) | (res ? 0 : F_Z); signsAB(); break;
     }
     case 0x0F: case 0x10: {                                                                              // AS, LS
-        int n = std::clamp(a, -8, 8); bool arithShift = d.alu == 0x0F; uint32_t c;
+        int n = std::clamp(a, -8, 8); bool arithShift = OP == 0x0F; uint32_t c;
         if (n > 0) {
             c = (ub >> (24 - n)) & 1;
             res = (ub << n) & 0xFFFFFF;
@@ -456,7 +459,7 @@ uint32_t Esp2Core::alu(const Decoded& d, uint32_t ua, uint32_t ub, bool setFlags
     }
     case 0x11: case 0x12: case 0x13: case 0x14: {                                                        // ASDH ASDL LSDH LSDL
         int n = std::clamp(sx24(aluShift_), -8, 8);
-        bool arithShift = d.alu <= 0x12, high = d.alu == 0x11 || d.alu == 0x13;
+        bool arithShift = OP <= 0x12, high = OP == 0x11 || OP == 0x13;
         int64_t x = (int64_t(arithShift ? b : int32_t(ub)) * (int64_t(1) << 24)) | ua;   // B high, A low
         if (!arithShift) x &= (int64_t(1) << 48) - 1;
         int64_t y = n >= 0 ? int64_t(uint64_t(x) << n) : (arithShift ? x >> -n : int64_t(uint64_t(x) >> -n));
@@ -483,6 +486,29 @@ uint32_t Esp2Core::alu(const Decoded& d, uint32_t ua, uint32_t ub, bool setFlags
     }
     if (setFlags) ccr_ = (fl & keep) | (fl & ~keep & 0x7F);
     return res;
+}
+
+
+// One routine per opcode (the switch above folds to one case); alu() and the specialised lines dispatch through it.
+namespace {
+using AluFn = uint32_t (*)(Esp2Core&, const Esp2Core::Decoded&, uint32_t, uint32_t, bool, bool&);
+}
+struct Esp2Core::Binder {
+    template <int... I> static constexpr std::array<AluFn, 32> aluTable(std::integer_sequence<int, I...>) { return {&Esp2Core::aluS<I>...}; }
+    static const std::array<AluFn, 32> kAlu;
+    using RunFn = void (*)(Esp2Core&, const Decoded&);
+    template <int K> static constexpr RunFn runAt() { return &Esp2Core::runT<K / 24, (K / 12) % 2, (K / 4) % 3, K % 4>; }
+    template <int... K> static constexpr std::array<RunFn, 48> runTable(std::integer_sequence<int, K...>) { return {runAt<K>()...}; }
+    static const std::array<RunFn, 48> kRun;
+    // ALU = 2 with the opcode compiled in, for the common shapes (no skip bits, MAC NOP or plain MAC): [AG][MAC][op]
+    template <int K> static constexpr RunFn runOpAt() { return &Esp2Core::runT<0, K / 64, (K / 32) % 2, 2, K % 32>; }
+    template <int... K> static constexpr std::array<RunFn, 128> runOpTable(std::integer_sequence<int, K...>) { return {runOpAt<K>()...}; }
+    static const std::array<RunFn, 128> kRunOp;
+    static const Decoded kOutside;               // PC beyond the 300 lines
+};
+
+uint32_t Esp2Core::alu(const Decoded& d, uint32_t ua, uint32_t ub, bool setFlags, bool& write) {
+    return Binder::kAlu[d.alu & 31](*this, d, ua, ub, setFlags, write);
 }
 
 void Esp2Core::stepRef() {
@@ -693,12 +719,204 @@ __attribute__((always_inline)) inline void Esp2Core::step() {
     if (biozNow) biozArmed_ = true;
 }
 
+const Esp2Core::Decoded Esp2Core::Binder::kOutside = [] { Decoded n{}; n.run = &Esp2Core::runStep; return n; }();
+
+// Threaded dispatch: each line's routine ends by running the next line's (a tail call), so every routine has its own
+// indirect jump and the branch predictor learns the program's line sequence. runTo bounds a chain to 256 lines.
+__attribute__((always_inline)) inline void Esp2Core::next() {
+    ++cycle_;
+    if (cycle_ < stop_ && !suspended_) {
+        const Decoded& n = pc_ < uint32_t(kInstr) ? dec_[pc_] : Binder::kOutside;
+        n.run(*this, n);
+    }
+}
+
+// The common opcodes written out directly for the specialised lines (aluT is the definition; the lockstep test checks
+// these against it): ADD ADDV SUBV SUB SUBREV set every flag from the exact result and the operand signs, AVG keeps
+// C, AND OR XOR keep C V LT. Saturation statistics go through a cold call.
+constexpr bool aluFastOp(int op) { return op == 0x00 || op == 0x01 || op == 0x03 || op == 0x04 || op == 0x1A || (op >= 0x08 && op <= 0x0A) || op == 0x0D; }
+
+void Esp2Core::aluSatCold(const Decoded& d, int64_t exact) {
+    const double ov = double(exact > 0 ? exact - 0x7FFFFF : -0x800000 - exact);
+    double& mo = satOver[d.C]; if (ov > mo) mo = ov;
+    ++aluSat; ++satDest[d.C];
+    if (d.C == spr::SER_DAC_L || d.C == spr::SER_DAC_R) ++satToDac;
+}
+
+template <int OP>
+__attribute__((always_inline)) inline uint32_t Esp2Core::aluFast(const Decoded& d, uint32_t ua, uint32_t ub, bool setFlags) {
+    const int32_t a = sx24(ua), b = sx24(ub);
+    const uint32_t signs = (a < 0 ? F_NA : 0) | (b < 0 ? F_NB : 0);
+    uint32_t res, fl;
+    if constexpr (OP <= 0x04 || OP == 0x1A) {
+        const int64_t exact = OP <= 0x01 ? int64_t(a) + b : OP == 0x1A ? int64_t(a) - b : int64_t(b) - a;
+        const uint32_t carry = OP <= 0x01 ? ((ua + ub) >> 24) & 1 : OP == 0x1A ? uint32_t(ua < ub) : uint32_t(ub < ua);
+        const bool v = exact > 0x7FFFFF || exact < -0x800000;
+        res = uint32_t(exact) & 0xFFFFFF;
+        const bool nprime = res & 0x800000;
+        if (__builtin_expect((OP == 0x00 || OP == 0x03 || OP == 0x1A) && v, 0)) { aluSatCold(d, exact); res = exact > 0 ? 0x7FFFFF : 0x800000; }
+        fl = (carry ? F_C : 0) | (v ? F_V : 0) | ((nprime ^ v) ? F_LT : 0);
+    } else if constexpr (OP == 0x0D) {
+        res = uint32_t((int64_t(a) + b) >> 1) & 0xFFFFFF;
+        fl = ccr_ & F_C;
+    } else {
+        res = OP == 0x08 ? (ua & ub) : OP == 0x09 ? (ua | ub) : (ua ^ ub);
+        fl = ccr_ & (F_C | F_V | F_LT);
+    }
+    if (setFlags) ccr_ = fl | ((res & 0x800000) ? F_N : 0) | (res ? 0 : F_Z) | signs;
+    return res;
+}
+
+// Specialised lines: step() with the per-line decisions made once, when the line is written (bind()). Template
+// parameters: SK = the line has a skip bit; AG = AGEN active (ag != 6); MAC 0 = MAC NOP, 1 = plain D/E operands and a
+// plain or ZERO destination, 2 = any other MAC; ALU 0 = MOV to ZERO (no effect), 1 = MOV with a plain source,
+// 2 = an arithmetic/logic opcode with plain operands (one routine per opcode), 3 = any other ALU line handled here.
+// Lines with indirection, condition-code ops, jumps, REPT, HOST or BIOZ, and pure NOPs that find work in flight, run
+// step() itself. Every statement below is step()'s, in the same order; only the decisions known at bind time are gone.
+template <int SK, int AG, int MAC, int ALU, int OP>
+__attribute__((always_inline)) inline void Esp2Core::stepT(const Decoded& d) {
+    bool aluEx = true, macEx = true, agEx = true;
+    if (SK) { const bool sk = skip(); aluEx = !(d.aluSkip && sk); macEx = !(d.macSkip && sk); agEx = !(d.agSkip && sk); }
+
+    if (memPend_.valid) {
+        const uint32_t ra = memPend_.addr - kRamBase;
+        if (ra < kRamWords) {
+            if (memPend_.addr < ramLow) ramLow = memPend_.addr;
+            if (memPend_.addr > ramHigh) ramHigh = memPend_.addr;
+            if (memPend_.write) { ++memWrites; ram_[ra] = dolTrunc(r_[spr::DOL0 - memPend_.latch]); wEpoch[ra] = epoch; }
+            else {
+                ++memReads; dilPend_ = true; dilPendLatch_ = memPend_.latch; dilPendVal_ = ram_[ra];
+                if (wEpoch[ra] < epoch && memPend_.addr >= staleWinLo && memPend_.addr <= staleWinHi) { ++staleReads; staleLow = std::min(staleLow, memPend_.addr); staleHigh = std::max(staleHigh, memPend_.addr); }
+            }
+        } else if (memPend_.write) memWrite(memPend_.addr, r_[spr::DOL0 - memPend_.latch]);
+        else { dilPend_ = true; dilPendLatch_ = memPend_.latch; dilPendVal_ = memRead(memPend_.addr); }
+        memPend_.valid = false;
+    }
+    uint32_t dv = 0, ev = 0;
+    if (MAC == 1) { dv = r_[d.D]; ev = r_[d.E]; }
+    else if (MAC == 2 && !d.macReserved) { dv = d.dPlain ? r_[d.D] : readReg(d.D); ev = d.ePlain ? r_[d.E] : readReg(d.E); }
+    const int64_t seedP = macp_, seedM = macLatch_;
+    if (AG && agEx) {
+        const uint32_t endA = d.agEnd, sizeA = endA + 1, baseA = endA + 2;
+        const uint32_t end = r_[endA], size = r_[sizeA];
+        int64_t addr = int64_t(r_[d.G]) + r_[baseA] + d.agPlus;
+        if (addr - int64_t(end) > 0) addr -= int64_t(size) + 1;
+        uint32_t ea = uint32_t(addr) & 0xFFFFFF;
+        if (d.agMem && (int64_t(ea) < int64_t(end) - int64_t(size) || ea > end)) ++regionViolations;
+        if (watch > 0 && d.agMem && !(ea - kRamBase < kRamWords) && (ea & ~0x1Fu) != kVoicePort) {
+            --watch; std::fprintf(stderr, "AGEN pc %03X op %d R%d G=%03X aor %06X -> %06X\n", pc_, d.ag, d.rgn, d.G, r_[d.G], ea);
+        }
+        if (d.agBase) r_[baseA] = ea;
+        if (d.agMem) { memPend_.valid = true; memPend_.write = d.ag & 1; memPend_.addr = ea; memPend_.latch = d.dl; }
+    }
+    if (aluPend_) { if (aluPendPlain_) r_[aluPendAddr_] = aluPendVal_; else { writer_ = 'A'; writeReg(aluPendAddr_, aluPendVal_); } aluPend_ = false; }
+
+    uint32_t newpc = npc_, newnpc = npc_ + 1;
+    if (aluEx) {
+        if (ALU == 1) { aluPend_ = true; aluPendPlain_ = d.cPlain; aluPendAddr_ = d.C; aluPendVal_ = r_[d.B]; }
+        else if (ALU == 2) {
+            bool write = false;
+            uint32_t res;
+            if constexpr (OP >= 0 && aluFastOp(OP)) { res = aluFast<OP>(d, r_[d.A], r_[d.B], !d.aluSkip); write = true; }
+            else if constexpr (OP >= 0) res = aluT<OP>(d, r_[d.A], r_[d.B], !d.aluSkip, write);
+            else res = d.aluFn(*this, d, r_[d.A], r_[d.B], !d.aluSkip, write);
+            if (write && d.C != spr::ZERO) { aluPend_ = true; aluPendPlain_ = d.cPlain; aluPendAddr_ = d.C; aluPendVal_ = res; }
+        } else if (ALU == 3) {
+            if (d.aluKind == 1) { aluPend_ = true; aluPendPlain_ = d.cPlain; aluPendAddr_ = d.C; aluPendVal_ = r_[d.B]; }
+            else if (d.aluKind == 0) {
+                uint32_t ua = 0, ub = 0;
+                if (d.aluReadsA) ua = d.aPlain ? r_[d.A] : readReg(d.A);
+                if (d.aluReadsB) ub = d.bPlain ? r_[d.B] : readReg(d.B);
+                bool write = false;
+                uint32_t res;
+                if (d.alu == 0x0B) { res = ub; write = true; }
+                else res = alu(d, ua, ub, !d.aluSkip, write);
+                if (write && d.C != spr::ZERO) { aluPend_ = true; aluPendPlain_ = d.cPlain; aluPendAddr_ = d.C; aluPendVal_ = res; }
+            }
+        }
+    }
+    if (MAC != 0 && macEx) {
+        if (MAC == 2 && d.macReserved) { ++reservedMacOps; }
+        else {
+            // step()'s MAC without its per-line branches: a seed is always a 52-bit value (MAC latch: wrapped; MACP:
+            // 48 bits), so wrap52 of an unshifted seed is the seed; seed - prod = seed + prod x -1.
+            const int64_t prod = int64_t(sx24(dv)) * sx24(ev) * d.macMul;
+            const int64_t seeds[3] = {0, seedP, seedM};
+            const int64_t seed = wrap52(int64_t(uint64_t(seeds[d.macSeed]) << d.seedL) >> d.seedR);
+            const int64_t acc = wrap52(seed + prod);
+            int64_t out = int64_t(uint64_t(acc) << d.outL) >> d.outR;
+            if (out > kMax48 || out < kMin48) {
+                { double ov = double(out < 0 ? kMin48 - out : out - kMax48) / 16777216.0; double& mo = satOver[d.F | 0x1000]; if (ov > mo) mo = ov; }
+                out = acc < 0 ? kMin48 : kMax48; ++macSat; ++satDest[d.F | 0x1000];
+                if (d.F == spr::SER_DAC_L || d.F == spr::SER_DAC_R) ++satToDac;
+            }
+            macrl_ = uint32_t(out) & 0xFFFFFF; r_[spr::MACRL] = macrl_;
+            macLatch_ = d.macLatchWrite ? acc : macLatch_;
+            const uint32_t fv = uint32_t(out >> 24) & 0xFFFFFF;
+            if (d.fKind == 1) r_[d.F] = fv; else if (MAC == 2 && d.fKind == 2) { writer_ = 'M'; writeReg(d.F, fv); }
+        }
+    }
+    if (dilPend_) { r_[spr::DIL0 - dilPendLatch_] = dilPendVal_; dilPend_ = false; }
+    writer_ = 'H';
+    if (pc_ == reptEnd_ && reptCnt_) { --reptCnt_; newpc = reptSt_; newnpc = reptSt_ + 1; }
+    pc_ = newpc & 0x3FF; npc_ = newnpc & 0x3FF;
+    if (biozArmed_) {
+        biozArmed_ = false;
+        if (iozStatus_) iozStatus_ = false; else { suspended_ = true; ++biozSuspends; }
+    }
+    next();
+}
+
+void Esp2Core::runStep(Esp2Core& c, const Decoded&) { c.step(); c.next(); }
+
+void Esp2Core::runNop(Esp2Core& c, const Decoded&) {
+    if (!c.memPend_.valid && !c.aluPend_ && !c.dilPend_ && !c.biozArmed_ && c.pc_ != c.reptEnd_) {
+        c.refpt_ = (c.refpt_ + 1) & 511;
+        c.pc_ = c.npc_; c.npc_ = (c.npc_ + 1) & 0x3FF;
+    } else c.step();
+    c.next();
+}
+
+const std::array<AluFn, 32> Esp2Core::Binder::kAlu = aluTable(std::make_integer_sequence<int, 32>{});
+const std::array<Esp2Core::Binder::RunFn, 48> Esp2Core::Binder::kRun = runTable(std::make_integer_sequence<int, 48>{});
+const std::array<Esp2Core::Binder::RunFn, 128> Esp2Core::Binder::kRunOp = runOpTable(std::make_integer_sequence<int, 128>{});
+
+// Chooses the routine for a decoded line (instruction memory only; indirect lines resolved at run time use step()).
+void Esp2Core::bind(Decoded& d) {
+    d.aluFn = Binder::kAlu[d.alu & 31];
+    d.macMul = int8_t(d.macSub ? -2 : 2);
+    const int sh = d.macShift;
+    const uint8_t l = uint8_t(sh > 0 ? sh : 0), r = uint8_t(sh < 0 ? -sh : 0);
+    d.seedL = d.macSeedShift ? l : 0; d.seedR = d.macSeedShift ? r : 0;
+    d.outL = d.macSeedShift ? 0 : l; d.outR = d.macSeedShift ? 0 : r;
+    d.agEnd = uint16_t(spr::REGION_END0 - 3 * d.rgn);
+    d.agPlus = (d.ag == 4 || d.ag == 5) ? 1 : 0;
+    d.agBase = d.ag == 2 || d.ag == 3 || d.ag == 7;
+    d.agMem = d.ag != 7;
+    const bool control = d.ccClass || (d.alu >= 0x18 && d.alu != 0x1A);   // HOST BIOZ MOVcc Jcc JScc RScc REPT
+    if (d.pureNop) { d.run = &Esp2Core::runNop; return; }
+    if (d.hasIndirect || control) { d.run = &Esp2Core::runStep; return; }
+    const int sk = d.anySkip ? 1 : 0, ag = d.ag != 6 ? 1 : 0;
+    const int mac = d.macNop ? 0 : (!d.macReserved && d.dPlain && d.ePlain && d.fKind != 2) ? 1 : 2;
+    int alu = 3;
+    if (d.alu == 0x0B && d.aluKind == 2) alu = 0;
+    else if (d.alu == 0x0B && d.aluKind == 1) alu = 1;
+    else if (d.aluKind == 0 && d.alu != 0x0B && d.aPlain && d.bPlain) alu = 2;
+    d.run = (alu == 2 && !sk && mac < 2) ? Binder::kRunOp[(ag * 2 + mac) * 32 + d.alu] : Binder::kRun[((sk * 2 + ag) * 3 + mac) * 4 + alu];
+}
+
 void Esp2Core::runTo(uint64_t target) {
     while (cycle_ < target) {
         if (!running()) { haltedCycles += target - cycle_; cycle_ = target; break; }
         if (suspended_) { suspendedCycles += target - cycle_; cycle_ = target; break; }
         if (fastPath) {
-            while (cycle_ < target && !suspended_) { step(); ++cycle_; ++executed; }
+            const uint64_t c0 = cycle_;
+            while (cycle_ < target && !suspended_) {
+                stop_ = std::min(target, cycle_ + 256);
+                const Decoded& d = pc_ < uint32_t(kInstr) ? dec_[pc_] : Binder::kOutside;
+                d.run(*this, d);
+            }
+            executed += cycle_ - c0;
         } else { stepRef(); ++cycle_; ++executed; }
     }
 }

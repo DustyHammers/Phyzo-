@@ -102,6 +102,24 @@ Line randomLine(Rng& r) {
     return l;
 }
 
+// Lines made of plain operands only (registers, DOL/DIL, constants, ZERO as destination), as effect programs are: these
+// reach the core's specialised line routines (every ALU opcode, every MAC form, AGEN, skips), where randomLine's SPR
+// operands mostly reach the general one.
+Line plainLine(Rng& r) {
+    const int reads[] = {0x000, 0x001, 0x002, 0x003, 0x00F, 0x010, 0x011, 0x0FF, 0x0FE, 0x0FD, 0x0FC, 0x1F0, 0x1FF, 0x1CC, 0x1CB, 0x3FF};
+    const int writes[] = {0x000, 0x001, 0x002, 0x003, 0x00F, 0x010, 0x011, 0x0FD, 0x0FC, 0x1EF, 0x1E0, 0x3FF};
+    const int aluOps[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+                          0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x1A, 0x00, 0x03, 0x0B, 0x0B, 0x0D};
+    const int macOps[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x14, 0x15, 0x16, 0x17,
+                          0x18, 0x19, 0x1A, 0x1B, 0x00, 0x08};
+    Line l;
+    if (r.below(6)) { l.alu = r.below(40) ? r.pick(aluOps) : 0x1B; l.A = l.alu == 0x1B ? r.below(0x400) : r.pick(reads); l.B = r.pick(reads); l.C = r.pick(writes); }
+    if (r.below(6)) { l.mac = r.pick(macOps); l.D = r.pick(reads); l.E = r.pick(reads); l.F = r.pick(writes); l.sh = r.below(16); }
+    if (r.below(2)) { const int ops[] = {0, 1, 2, 3, 4, 5, 7}; l.ag = r.pick(ops); l.rgn = r.below(2); l.G = 0x200 + r.below(4); l.dl = r.below(16); }
+    if (r.below(8) == 0) { l.aluSkip = r.below(2); l.macSkip = r.below(2); l.agSkip = r.below(2); }
+    return l;
+}
+
 void setup(Esp2Core& e, const std::vector<Line>& prog, Rng& r, bool magTrunc) {
     for (size_t i = 0; i < prog.size(); ++i) hostIns(e, uint32_t(i), encode(prog[i]));
     for (int a = 0; a < 0x20; ++a) hostReg(e, uint32_t(a), r.next() & 0xFFFFFF);
@@ -190,6 +208,33 @@ int main() {
         totals[4] += fast.executed; totals[5] += fast.biozSuspends;
     }
     CHECK(divergent == 0);
+
+    // 2b. Plain-operand programs, translated vs reference in lockstep (no golden hash: 2 + 3 hold the recorded output).
+    int plainDivergent = 0; uint64_t plainExec = 0, plainSat = 0;
+    for (uint64_t seed = 1001; seed <= 1200; ++seed) {
+        Rng r{seed};
+        std::vector<Line> body;
+        for (int i = 0, n = 30 + r.below(150); i < n; ++i) body.push_back(plainLine(r));
+        const auto prog = harness(body);
+        Esp2Core fast, ref;
+        fast.fastPath = true; ref.fastPath = false;
+        Rng r1{seed}, r2{seed};
+        setup(fast, prog, r1, seed % 2 == 0); setup(ref, prog, r2, seed % 2 == 0);
+        for (uint64_t s = 0; s < 200; ++s) {
+            feed(fast, s); feed(ref, s);
+            fast.runTo((s + 1) * ips); ref.runTo((s + 1) * ips);
+            fast.sampleTick(); ref.sampleTick();
+            const std::string d = diff(fast, ref);
+            if (!d.empty()) {
+                if (plainDivergent < 5) std::printf("plain seed %" PRIu64 " sample %" PRIu64 ": translated and reference differ (%s)\n", seed, s, d.c_str());
+                ++plainDivergent; break;
+            }
+        }
+        plainExec += fast.executed; plainSat += fast.macSat + fast.aluSat;
+    }
+    std::printf("esp2_core_test: 200 plain-operand programs, %" PRIu64 " instructions, %" PRIu64 " saturations; translated == reference: %s\n",
+                plainExec, plainSat, plainDivergent ? "NO" : "yes");
+    CHECK(plainDivergent == 0 && plainSat > 0);
     // The random programs must actually reach the paths they are meant to cover.
     CHECK(totals[0] > 0 && totals[1] > 0 && totals[2] > 0 && totals[3] > 0);
 

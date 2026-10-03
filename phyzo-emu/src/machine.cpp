@@ -2,7 +2,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
-#include <mutex>
+#include <atomic>
+#include <thread>
 #include "os_profile.h"
 #include "state_io.h"
 
@@ -16,16 +17,39 @@ void phyzo_cpu_load(const void* src);
 
 Machine* g_machine = nullptr;
 
-// Musashi has one global CPU. Several machines (plugin instances) take turns: whoever runs holds the lock, and the
-// CPU state of the previous owner is parked in that machine until it runs again.
+// Musashi has one global CPU. Several machines (plugin instances) take turns on it: whoever runs 68k code holds the
+// lock, and the CPU state of the previous owner is parked in that machine until it runs again. Only the 68k needs it:
+// each machine's devices (timers, serial, voice chip, ESP2) are its own and run outside the lock, so instances run
+// their voice chips and ESP2s in parallel. The lock is held for one 68k slice (at most one sample period) at a time;
+// a waiter spins briefly (the holder releases within microseconds) before yielding, as sleeping on a mutex would cost
+// a wake-up latency per slice.
 namespace {
-std::mutex g_cpuMutex;
+std::atomic<bool> g_cpuBusy{false};
 Machine* g_cpuOwner = nullptr;
+
+inline void cpuRelax() {
+#if defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#elif defined(__aarch64__) || defined(__arm__)
+    __asm__ __volatile__("yield");
+#endif
+}
+
+void lockCpu() {
+    for (int spins = 0;;) {
+        if (!g_cpuBusy.exchange(true, std::memory_order_acquire)) return;
+        while (g_cpuBusy.load(std::memory_order_relaxed)) {
+            if (++spins < 20000) cpuRelax(); else std::this_thread::yield();
+        }
+    }
+}
+void unlockCpu() { g_cpuBusy.store(false, std::memory_order_release); }
 }
 
 struct CpuLock {
-    std::lock_guard<std::mutex> guard;
-    explicit CpuLock(Machine& m) : guard(g_cpuMutex) { m.becomeCpuOwner(); }
+    Machine& m;
+    explicit CpuLock(Machine& mm) : m(mm) { lockCpu(); m.becomeCpuOwner(); m.cpuHeld_ = true; }
+    ~CpuLock() { m.cpuHeld_ = false; unlockCpu(); }
 };
 
 void Machine::becomeCpuOwner() {
@@ -55,11 +79,10 @@ inline void putBe(uint8_t* p, uint32_t v, int size) {
 
 Machine::Machine() : flash_(kFlashSize, 0xff), ram_(kRamSize, 0) {}
 Machine::~Machine() {
-    {
-        std::lock_guard<std::mutex> g(g_cpuMutex);
-        if (g_cpuOwner == this) g_cpuOwner = nullptr;
-        if (g_machine == this) g_machine = nullptr;
-    }
+    lockCpu();
+    if (g_cpuOwner == this) g_cpuOwner = nullptr;
+    if (g_machine == this) g_machine = nullptr;
+    unlockCpu();
     if (voice.log) std::fclose(voice.log);
     if (voice.resonanceLog) std::fclose(voice.resonanceLog);
     if (esp2.log) std::fclose(esp2.log);
@@ -94,7 +117,11 @@ bool Machine::init(const OsImage& os, const Config& cfg, std::string& err) {
     panel.cyclesPerMs = uint64_t(cfg_.cpuHz / 1000.0);
     panel.sendToOs = [this](const std::vector<uint8_t>& b, uint64_t when) { serial.queueRx(0, b, when); };
 
-    // A1/A6: 68020-mode core, SR = 0x2700, VBR = 0, SSP = 0x0BE30000, call main.
+    // A1/A6: 68020-mode core, SR = 0x2700, VBR = 0, SSP = 0x0BE30000, call main. The core starts from the cleared
+    // state the first machine in a process finds (reset leaves D/A registers alone; they must not carry over from
+    // whichever machine used the shared core last).
+    cpuSnap_.assign(phyzo_cpu_state_size(), 0);
+    phyzo_cpu_load(cpuSnap_.data());
     m68k_init();
     m68k_set_cpu_type(M68K_CPU_TYPE_68020);
     m68k_pulse_reset();
@@ -152,6 +179,9 @@ uint64_t Machine::now() { return inExecute_ ? sliceStart_ + uint64_t(m68k_cycles
 void Machine::reschedule() { if (inExecute_) m68k_end_timeslice(); }
 
 void Machine::irqChanged() {
+    // A device raised or lowered a line while the devices advance outside the CPU lock: Musashi is told now, as it
+    // always was (m68k_set_irq may take the interrupt at once), with the lock held for that call.
+    if (!cpuHeld_) { CpuLock cpu(*this); updateIrq(); return; }
     int old = irqLevel_;
     updateIrq();
     if (irqLevel_ != old && inExecute_) m68k_end_timeslice();
@@ -215,29 +245,35 @@ void Machine::advanceDevices() {
 uint64_t Machine::nextEvent() const { return std::min({timer1.nextEvent(), serial.nextEvent(), nextSample_}); }
 
 Machine::Stop Machine::runUntil(uint64_t limit, const std::function<bool()>& pred) {
-    CpuLock cpu(*this);
     auto t0 = std::chrono::steady_clock::now();
     Stop result = Stop::TimeLimit;
     const uint64_t window = cyclesFromMs(cfg_.stallWindowMs);
     while (cycles_ < limit) {
-        advanceDevices();
-        updateIrq();
-        uint64_t next = std::min(limit, nextEvent());
-        uint64_t budget = next > cycles_ ? next - cycles_ : 1;
-        if (budget > cfg_.maxSlice) budget = cfg_.maxSlice;
-        sliceStart_ = cycles_;
-        inExecute_ = true;
-        int used = m68k_execute(int(budget));
-        inExecute_ = false;
-        cycles_ += uint64_t(used > 0 ? used : 1);
+        advanceDevices();                          // this machine's own devices: outside the CPU lock
+        uint32_t pc;
+        {
+            std::chrono::steady_clock::time_point w0;
+            if (profile) w0 = std::chrono::steady_clock::now();
+            CpuLock cpu(*this);
+            if (profile) profCpuWait += std::chrono::duration<double>(std::chrono::steady_clock::now() - w0).count();
+            updateIrq();
+            uint64_t next = std::min(limit, nextEvent());
+            uint64_t budget = next > cycles_ ? next - cycles_ : 1;
+            if (budget > cfg_.maxSlice) budget = cfg_.maxSlice;
+            sliceStart_ = cycles_;
+            inExecute_ = true;
+            int used = m68k_execute(int(budget));
+            inExecute_ = false;
+            cycles_ += uint64_t(used > 0 ? used : 1);
 
-        uint32_t pc = m68k_get_reg(nullptr, M68K_REG_PC);
-        // Trap stubs: PC sits just past a STOP in the boot block.
-        if (pc > kVectorStubs && pc <= kVectorStubs + 0x400 && ((pc - kVectorStubs) & 3) == 0) {
-            uint32_t vec = (pc - kVectorStubs) / 4 - 1;
-            char b[96]; std::snprintf(b, sizeof b, "unexpected exception, vector %u", vec);
-            trapReason = b; trapPc = m68k_get_reg(nullptr, M68K_REG_PPC);
-            result = Stop::Trap; break;
+            pc = m68k_get_reg(nullptr, M68K_REG_PC);
+            // Trap stubs: PC sits just past a STOP in the boot block.
+            if (pc > kVectorStubs && pc <= kVectorStubs + 0x400 && ((pc - kVectorStubs) & 3) == 0) {
+                uint32_t vec = (pc - kVectorStubs) / 4 - 1;
+                char b[96]; std::snprintf(b, sizeof b, "unexpected exception, vector %u", vec);
+                trapReason = b; trapPc = m68k_get_reg(nullptr, M68K_REG_PPC);
+                result = Stop::Trap; break;
+            }
         }
         if (pc == kRebootStub + 4) { trapReason = "reboot service called (jmp via 0x4)"; result = Stop::Trap; break; }
         if (pc == kOsUpdateStub + 4) { trapReason = "OS update service called (jmp via 0x3F8)"; result = Stop::Trap; break; }
