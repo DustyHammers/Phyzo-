@@ -86,10 +86,12 @@ Right-click anywhere in the window for the menu (the same in every skin):
 
 - **Skin**: Built-in, then every skin in your skins folder (the current one is ticked).
 - **Reload skin** (or press **F5** with the window focused): reads the skin again from disk after you edit it.
-- **Zoom**: 75, 100, 125, 150 or 200 %.
+- **Zoom**: 75, 100, 125, 150 or 200 %. You can also drag the window's bottom-right corner (the small grip) to any
+  size from 50 to 200 %; the skin keeps its proportions and stays sharp at every size.
 - **Developer > RmlUi debugger**: RmlUi's inspector, for working on a skin.
 
-Skin and zoom are global settings: they apply to every Phyzo window and project, and are not saved in projects.
+The skin is a global setting (every Phyzo window and project). The window size is remembered twice: globally, for
+new instances, and in each project, so a project reopens at the size it was saved with.
 If the chosen skin is missing or cannot be loaded, Phyzo shows "rack" instead (then Built-in) with a message saying
 why. Skin messages and script errors are written to `~/Documents/Phyzo/skin-log.txt`. How to write a skin:
 `docs/SKINS.md` in the repository.

@@ -4,7 +4,7 @@
 
 namespace {
 constexpr uint32_t kStateMagic = 0x505A4850;     // "PHZP" (little-endian)
-constexpr uint32_t kStateVersion = 2;          // 2: + skin knob positions (1 is still read)
+constexpr uint32_t kStateVersion = 3;          // 2: + skin knob positions; 3: + window size (older still read)
 constexpr int kTimerMs = 100, kScanEveryTicks = 20;   // rescan the ROM folder every 2 s while something is missing
 }
 
@@ -77,7 +77,7 @@ void PhyzoProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
 juce::AudioProcessorEditor* PhyzoProcessor::createEditor() { return new PhyzoEditor(*this); }
 
 // State: magic, version, UI flags, the engine state (complete machine, gzip-compressed), then the skin's knob
-// element positions (count, then id and raw for each).
+// element positions (count, then id and raw for each), then the window size (scale of the skin's base size).
 void PhyzoProcessor::getStateInformation(juce::MemoryBlock& dest) {
     ++meter.stateRequests;
     const std::vector<uint8_t> engineState = engine_.getState();
@@ -97,6 +97,7 @@ void PhyzoProcessor::getStateInformation(juce::MemoryBlock& dest) {
     std::lock_guard<std::mutex> lk(port_.mtx);
     out.writeInt(int(port_.knobs.size()));
     for (const auto& kv : port_.knobs) { out.writeString(juce::String::fromUTF8(kv.first.c_str())); out.writeInt(kv.second); }
+    out.writeFloat(editorScale.load());
 }
 
 void PhyzoProcessor::setStateInformation(const void* data, int size) {
@@ -121,6 +122,7 @@ void PhyzoProcessor::setStateInformation(const void* data, int size) {
             knobs[id.toStdString()] = juce::jlimit(0, 1023, in.readInt());
         }
     }
+    if (version >= 3 && !in.isExhausted()) editorScale = in.readFloat();
     { std::lock_guard<std::mutex> lk(port_.mtx); port_.knobs = std::move(knobs); }
     engine_.setState(engineState);
 }

@@ -30,11 +30,14 @@ inline void set(const char* key, const juce::var& v) {
 inline juce::String skin() { return get("skin"); }
 inline void setSkin(const juce::String& name) { set("skin", name); }
 
-inline int zoom() {
-    const int z = get("zoom").getIntValue();
-    for (int v : kZooms) if (v == z) return z;
-    return 100;
+// Window size as a fraction of the skin's base size (0.5-2.0). Older settings stored a zoom percentage.
+inline constexpr float kMinScale = 0.5f, kMaxScale = 2.0f;
+inline float scale() {
+    const juce::String s = get("scale");
+    float v = s.isNotEmpty() ? s.getFloatValue() : get("zoom").getIntValue() / 100.0f;
+    if (!(v >= kMinScale && v <= kMaxScale)) v = 1.0f;
+    return v;
 }
-inline void setZoom(int percent) { set("zoom", percent); }
+inline void setScale(float v) { set("scale", juce::String(v, 4)); }
 
 }  // namespace SkinSettings

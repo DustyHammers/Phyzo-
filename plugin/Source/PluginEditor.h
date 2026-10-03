@@ -17,10 +17,16 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
     void mouseDown(const juce::MouseEvent&) override;
+    void mouseDrag(const juce::MouseEvent&) override;
+    void mouseUp(const juce::MouseEvent&) override;
+    void mouseMove(const juce::MouseEvent&) override;
     void setNotice(const juce::String& text);        // e.g. why this skin is shown instead of the chosen one
     std::function<void(const juce::MouseEvent&)> onRightClick;
+    std::function<void(int phase, juce::Point<int> offset)> onCornerResize;   // as RmlSkinComponent's
 
 private:
+    bool cornerDrag_ = false;
+    juce::Point<int> cornerStart_;
     class PanelButton : public juce::Component {     // presses an OS button (0 = -/No, 1 = +/Yes) while held
     public:
         PanelButton(PhyzoProcessor& p, int osButton, juce::String label) : proc(p), id(osButton), text(std::move(label)) {}
@@ -57,14 +63,20 @@ private:
     void showSkin(const juce::String& name, const juce::String& notice = {});
     void showBuiltIn(const juce::String& notice);
     void skinFailed(const juce::String& name, const juce::String& reason);
-    void applyZoom();
+    void applyScale(float scale);
+    void cornerResize(int phase, juce::Point<int> offset);                    // window = skin's base size x scale (0.5-2.0)
+    juce::Point<int> baseSize() const;               // 1795 x 848 for file skins, Built-in's own size
     void showMenu(const juce::MouseEvent&);
-    void timerCallback() override;                   // missing-ROM message on file skins
+    void timerCallback() override;                   // missing-ROM message on file skins; saves the size
 
     PhyzoProcessor& proc;
     std::unique_ptr<BuiltinView> builtin_;
     std::unique_ptr<RmlSkinComponent> rml_;
     juce::String current_;                           // the skin being shown
-    int zoom_ = 100;
+    float scale_ = 1.0f;
+    bool applying_ = false;
+    bool scaleDirty_ = false;                        // global setting not yet written
+    juce::ComponentBoundsConstrainer constrainer_;
+    juce::Rectangle<int> dragStartBounds_;
     bool debugger_ = false;
 };

@@ -50,6 +50,7 @@ public:
     skin::PanelPort& panelPort() { return port_; }
     double hostRate() const { return hostRate_.load(); }
     bool showDebug = true;
+    std::atomic<float> editorScale{0};               // window size of this project (0: not set); saved with it
 
     struct Meter {                                   // CPU per block, written by the audio thread
         std::atomic<float> avg{0}, peak{0}, last{0}, lastMs{0}, blockMs{0};
