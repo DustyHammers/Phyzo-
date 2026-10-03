@@ -43,8 +43,9 @@ struct Chip {
     }
 };
 
-// Level law at full volume register 0xFFFF: table entry 0xFFF = (0x1FF << 7) >> 1 = 32704, output = s * 32704 >> 11.
-int32_t full(int32_t s) { return int32_t((int64_t(s) * 32704) >> 11); }
+// Level law at full volume register 0xFFFF: table entry 0xFFF = (0x1FF << 7) >> 1 = 32704, output = s * 32704 >> 12
+// (A-17 headroom).
+int32_t full(int32_t s) { return int32_t((int64_t(s) * 32704) >> 12); }
 
 }  // namespace
 
@@ -149,7 +150,7 @@ int main() {
         }
         CHECK(copyMismatch == 0);
         CHECK(k.c.resonantSamples > 0 && k.c.bypassSamples > 0 && k.c.stateClamps > 0);
-        const uint64_t kGolden = 0x45b54dbc7bf53247ull;   // recorded from the v0.6 core (2026-10-02)
+        const uint64_t kGolden = 0x5c0654db6b80512bull;   // A-17 headroom (volume >> 12), recorded 2026-10-03
         std::printf("voice_core_test: resonant samples %llu, bypass samples %llu, state saturations %llu; render hash %016" PRIx64 "\n",
                     (unsigned long long)k.c.resonantSamples, (unsigned long long)k.c.bypassSamples, (unsigned long long)k.c.stateClamps, h);
         if (h != kGolden) { std::printf("FAIL: render hash differs from the recorded %016" PRIx64 "\n", kGolden); ++failures; }

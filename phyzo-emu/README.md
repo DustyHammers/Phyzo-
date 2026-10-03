@@ -95,7 +95,8 @@ on level 5 (IRQV read acknowledges), STOP0 at the end of one-shots (a voice with
 writes START = END and expects that), CR bit 19 as a start strobe, signed 8.8
 volume and K1/K2 ramps with the slow bit (bit 0: applied every 8th sample), ECOUNT, the four non-resonant
 4-pole filter modes, the ES5506 log volume law, live read-back of every register, and the filter field in CR bits 8-10 (see below).
-Register 0x48, 0x58-0x68, 0x74 and CR bit 10 changes are logged to `resonance_register_writes.csv`. Output is the dry stereo sum, unclamped; 2^19 is the full scale of the chip's 20-bit output.
+Register 0x48, 0x58-0x68, 0x74 and CR bit 10 changes are logged to `resonance_register_writes.csv`. Output is the dry stereo sum, unclamped; 2^19 is the full scale of the chip's 20-bit output. Voice level =
+(sample × volume) >> 12 (A-17 output headroom for 48 voices, Derived; was >> 11, i.e. 6.02 dB louder).
 
 ## phyzo_play: script-driven renders
 
