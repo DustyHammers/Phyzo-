@@ -164,6 +164,11 @@ add_executable(phyzo_stress src/stress_main.cpp)
 target_link_libraries(phyzo_stress PRIVATE phyzo_core)
 target_compile_options(phyzo_stress PRIVATE -Wall -Wextra)
 
+# Component speed benchmark without ROMs (not a CI test).
+add_executable(speed_bench tools/speed_bench.cpp)
+target_link_libraries(speed_bench PRIVATE phyzo_core)
+target_include_directories(speed_bench PRIVATE src)
+
 add_executable(engine_test tests/engine_test.cpp)
 target_link_libraries(engine_test PRIVATE phyzo_core)
 target_compile_options(engine_test PRIVATE -Wall -Wextra)
