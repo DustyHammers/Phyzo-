@@ -38,6 +38,7 @@ void PhyzoProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     hostRate_ = sampleRate;
     meter.worstMs = 0; meter.overruns = 0;
     engine_.prepare(sampleRate, samplesPerBlock);
+    engine_.setProfiling(true);                      // per-part times for the debug overlay (output unchanged)
     setLatencySamples(engine_.latencySamples());
 }
 
@@ -64,9 +65,20 @@ void PhyzoProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
     if (load > 1.0) ++meter.overruns;
     if (float(used * 1000) > meter.worstMs.load()) meter.worstMs = float(used * 1000);
     winTime_ += used; winBudget_ += budget; winPeak_ = std::max(winPeak_, load);
+    const Engine::BlockTimes& bt = engine_.lastBlockTimes();
+    const double parts[Meter::kParts] = {bt.cpu, bt.voice, bt.esp2, bt.resample, bt.queue};
+    for (int i = 0; i < Meter::kParts; ++i) {
+        winPart_[size_t(i)] += parts[i];
+        if (budget > 0) winPartPeak_[size_t(i)] = std::max(winPartPeak_[size_t(i)], parts[i] / budget);
+    }
     if (winBudget_ >= 1.0) {
         const float avg = float(winTime_ / winBudget_);
         meter.avg = avg; meter.peak = float(winPeak_);
+        for (size_t i = 0; i < size_t(Meter::kParts); ++i) {
+            meter.partAvg[i] = float(winPart_[i] / winBudget_);
+            meter.partPeak[i] = float(winPartPeak_[i]);
+            winPart_[i] = winPartPeak_[i] = 0;
+        }
         const uint32_t h = meter.head.load();
         meter.history[h % meter.history.size()] = avg;
         meter.head = h + 1;

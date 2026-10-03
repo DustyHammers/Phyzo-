@@ -67,6 +67,13 @@ public:
     void process(float* left, float* right, int n, const MidiEvent* events, int numEvents);
     int latencySamples() const { return latency_.load(); }   // host samples, valid after prepare()
 
+    // Time spent in the last process() call by part (seconds; audio thread, read right after process()).
+    // cpu = 68k and its devices (timers, serial, DMA); voice = voice chip; esp2 = ESP2 core and its sample edge;
+    // resample = conversion to the host rate; queue = UI-to-audio events (buttons, knobs, MIDI scheduling).
+    struct BlockTimes { double cpu = 0, voice = 0, esp2 = 0, resample = 0, queue = 0; };
+    const BlockTimes& lastBlockTimes() const { return times_; }
+    void setProfiling(bool on) { profiling_ = on; }   // per-part timing (a few clock reads per sample)
+
     // ---- tests
     std::vector<uint8_t> machineStateForTest();
     uint32_t peekForTest(uint32_t addr, int size);
@@ -119,6 +126,8 @@ private:
     int marginIn_ = 48;                              // input frames of slack for MIDI scheduling
     std::vector<float> inL_, inR_;
     std::array<uint64_t, 64> midiTimes_{};           // test record of scheduled MIDI times
+    BlockTimes times_;
+    std::atomic<bool> profiling_{false};
     uint64_t midiCount_ = 0, lateMidi_ = 0;
 
     // status
