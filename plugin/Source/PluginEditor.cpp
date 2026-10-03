@@ -89,8 +89,23 @@ void BuiltinView::resized() {
     debugToggle.setBounds(12, 217, 90, 22);
 }
 
+namespace { constexpr int kCorner = 24; }
+static bool inCorner(const juce::Component& c, const juce::MouseEvent& e) {
+    return e.x >= c.getWidth() - kCorner && e.y >= c.getHeight() - kCorner;
+}
+
 void BuiltinView::mouseDown(const juce::MouseEvent& e) {
-    if (e.mods.isPopupMenu() && onRightClick) onRightClick(e);
+    if (e.mods.isPopupMenu()) { if (onRightClick) onRightClick(e); return; }
+    if (onCornerResize && inCorner(*this, e)) { cornerDrag_ = true; cornerStart_ = e.getScreenPosition(); onCornerResize(0, {}); }
+}
+void BuiltinView::mouseDrag(const juce::MouseEvent& e) {
+    if (cornerDrag_ && onCornerResize) onCornerResize(1, e.getScreenPosition() - cornerStart_);
+}
+void BuiltinView::mouseUp(const juce::MouseEvent& e) {
+    if (cornerDrag_) { cornerDrag_ = false; if (onCornerResize) onCornerResize(2, e.getScreenPosition() - cornerStart_); }
+}
+void BuiltinView::mouseMove(const juce::MouseEvent& e) {
+    setMouseCursor(inCorner(*this, e) ? juce::MouseCursor::BottomRightCornerResizeCursor : juce::MouseCursor::NormalCursor);
 }
 
 void BuiltinView::setNotice(const juce::String& text) {
@@ -127,6 +142,11 @@ void BuiltinView::paint(juce::Graphics& g) {
     g.setColour(kRed.withAlpha(0.6f));
     g.drawHorizontalLine(212, 0, float(kWidth));
     if (proc.showDebug) paintDebug(g, 212);
+    g.setColour(kRed.withAlpha(0.6f));                                  // resize grip
+    for (int i = 1; i <= 3; ++i) {
+        const float d = float(i) * 4.0f;
+        g.drawLine(float(kWidth) - d, float(kHeight) - 2.0f, float(kWidth) - 2.0f, float(kHeight) - d, 1.0f);
+    }
 }
 
 void BuiltinView::paintDisplay(juce::Graphics& g, juce::Rectangle<int> area) {
@@ -208,7 +228,11 @@ void BuiltinView::paintDebug(juce::Graphics& g, int y) {
 // ================================================================== editor
 
 PhyzoEditor::PhyzoEditor(PhyzoProcessor& p) : AudioProcessorEditor(&p), proc(p) {
-    zoom_ = SkinSettings::zoom();
+    // Size: the project's own if it has one, else the global setting.
+    const float projectScale = proc.editorScale.load();
+    scale_ = projectScale >= SkinSettings::kMinScale && projectScale <= SkinSettings::kMaxScale ? projectScale : SkinSettings::scale();
+    setConstrainer(&constrainer_);
+    setResizable(true, false);                      // our own corner drag (JUCE's corner would sit under the OpenGL view)
     juce::String want = SkinSettings::skin();
     if (want.isEmpty()) want = skinNames().contains(SkinSettings::kDefaultSkin) ? SkinSettings::kDefaultSkin : SkinSettings::kBuiltIn;
     setSize(BuiltinView::kWidth, BuiltinView::kHeight);
@@ -227,10 +251,12 @@ static juce::String romMessage(const PhyzoProcessor& proc) {
 
 void PhyzoEditor::timerCallback() {
     if (rml_) rml_->setPersistentMessage(romMessage(proc));
+    if (scaleDirty_) { scaleDirty_ = false; SkinSettings::setScale(scale_); }   // not on every drag step
 }
 
 PhyzoEditor::~PhyzoEditor() {
     stopTimer();
+    if (scaleDirty_) SkinSettings::setScale(scale_);
     rml_.reset();                                    // closes its OpenGL context first
     builtin_.reset();
 }
@@ -253,6 +279,7 @@ void PhyzoEditor::showSkin(const juce::String& name, const juce::String& notice)
     if (!rml_) {
         rml_ = std::make_unique<RmlSkinComponent>(proc);
         rml_->onRightClick = [this](const juce::MouseEvent& e) { showMenu(e); };
+        rml_->onCornerResize = [this](int phase, juce::Point<int> d) { cornerResize(phase, d); };
         addAndMakeVisible(*rml_);
     }
     current_ = name;
@@ -263,7 +290,7 @@ void PhyzoEditor::showSkin(const juce::String& name, const juce::String& notice)
     rml_->setDebugger(debugger_);
     rml_->setPersistentMessage(romMessage(proc));
     rml_->loadSkin(skinFolder(name), name);
-    applyZoom();
+    applyScale(scale_);
 }
 
 void PhyzoEditor::showBuiltIn(const juce::String& notice) {
@@ -271,11 +298,12 @@ void PhyzoEditor::showBuiltIn(const juce::String& notice) {
     if (!builtin_) {
         builtin_ = std::make_unique<BuiltinView>(proc);
         builtin_->onRightClick = [this](const juce::MouseEvent& e) { showMenu(e); };
+        builtin_->onCornerResize = [this](int phase, juce::Point<int> d) { cornerResize(phase, d); };
         addAndMakeVisible(*builtin_);
     }
     current_ = SkinSettings::kBuiltIn;
     if (notice.isNotEmpty()) builtin_->setNotice(notice);
-    applyZoom();
+    applyScale(scale_);
 }
 
 // A skin that is missing or fails to load: rack, then Built-in, saying why.
@@ -291,21 +319,51 @@ void PhyzoEditor::skinFailed(const juce::String& name, const juce::String& reaso
     });
 }
 
-void PhyzoEditor::applyZoom() {
-    const float z = float(zoom_) / 100.0f;
-    if (builtin_) {
-        builtin_->setTransform(juce::AffineTransform::scale(z));
-        setSize(juce::roundToInt(BuiltinView::kWidth * z), juce::roundToInt(BuiltinView::kHeight * z));
-    } else if (rml_) {
-        rml_->setZoom(z);
-        setSize(juce::roundToInt(skin::kBodyWidthDp * z), juce::roundToInt(skin::kBodyHeightDp * z));
-    }
+juce::Point<int> PhyzoEditor::baseSize() const {
+    if (rml_) return {juce::roundToInt(skin::kBodyWidthDp), juce::roundToInt(skin::kBodyHeightDp)};
+    return {BuiltinView::kWidth, BuiltinView::kHeight};
+}
+
+// Dragging the bottom-right corner: follow whichever direction moved further, keeping the aspect ratio.
+void PhyzoEditor::cornerResize(int phase, juce::Point<int> d) {
+    if (phase == 0) { dragStartBounds_ = getBounds(); return; }
+    const auto base = baseSize();
+    const float aspect = float(base.x) / float(base.y);
+    const int dy = juce::roundToInt(float(d.y) * aspect);
+    const int dw = std::abs(d.x) >= std::abs(dy) ? d.x : dy;
+    auto b = dragStartBounds_.withWidth(dragStartBounds_.getWidth() + dw);
+    b.setHeight(juce::roundToInt(float(b.getWidth()) / aspect));
+    constrainer_.setBoundsForComponent(this, b, false, false, true, true);   // 50-200 %, aspect ratio
+}
+
+// Resizable by the corner (or the host), locked to the skin's aspect ratio, 50-200 % of its base size.
+void PhyzoEditor::applyScale(float scale) {
+    scale_ = juce::jlimit(SkinSettings::kMinScale, SkinSettings::kMaxScale, scale);
+    const auto base = baseSize();
+    constrainer_.setFixedAspectRatio(double(base.x) / double(base.y));
+    constrainer_.setSizeLimits(juce::roundToInt(base.x * SkinSettings::kMinScale), juce::roundToInt(base.y * SkinSettings::kMinScale),
+                               juce::roundToInt(base.x * SkinSettings::kMaxScale), juce::roundToInt(base.y * SkinSettings::kMaxScale));
+    applying_ = true;
+    setSize(juce::roundToInt(base.x * scale_), juce::roundToInt(base.y * scale_));
+    applying_ = false;
     resized();
 }
 
 void PhyzoEditor::resized() {
-    if (builtin_) builtin_->setBounds(0, 0, BuiltinView::kWidth, BuiltinView::kHeight);   // scaled by its transform
-    if (rml_) rml_->setBounds(getLocalBounds());
+    const auto base = baseSize();
+    if (!applying_ && getWidth() > 0) {              // a resize by the user or the host: the width sets the scale
+        const float s = juce::jlimit(SkinSettings::kMinScale, SkinSettings::kMaxScale, float(getWidth()) / float(base.x));
+        if (std::abs(s - scale_) > 1e-4f) { scale_ = s; scaleDirty_ = true; }
+    }
+    proc.editorScale = scale_;                       // saved with the project
+    if (builtin_) {
+        builtin_->setTransform(juce::AffineTransform::scale(float(getWidth()) / float(base.x), float(getHeight()) / float(base.y)));
+        builtin_->setBounds(0, 0, BuiltinView::kWidth, BuiltinView::kHeight);
+    }
+    if (rml_) {
+        rml_->setZoom(float(getWidth()) / float(base.x));   // the dp ratio follows the window: art drawn at its size
+        rml_->setBounds(getLocalBounds());
+    }
 }
 
 void PhyzoEditor::showMenu(const juce::MouseEvent&) {
@@ -319,7 +377,11 @@ void PhyzoEditor::showMenu(const juce::MouseEvent&) {
     for (const juce::String& n : names)
         skins.addItem(n, true, current_ == n, [this, n] { SkinSettings::setSkin(n); showSkin(n); });
     for (int z : SkinSettings::kZooms)
-        zoom.addItem(juce::String(z) + " %", true, zoom_ == z, [this, z] { zoom_ = z; SkinSettings::setZoom(z); applyZoom(); });
+        zoom.addItem(juce::String(z) + " %", true, std::abs(scale_ * 100.0f - float(z)) < 0.5f, [this, z] {
+            applyScale(float(z) / 100.0f);
+            scaleDirty_ = false;
+            SkinSettings::setScale(scale_);
+        });
     dev.addItem("RmlUi debugger", fileSkin, fileSkin && debugger_, [this] {
         debugger_ = !debugger_;
         if (rml_) rml_->setDebugger(debugger_);

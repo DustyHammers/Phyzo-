@@ -58,8 +58,9 @@ owner step by step through anything they must do by hand on github.com or on the
   elements knob/pbutton/led/vfdigit and the `panel`/`plugin` Lua API; `skin_test` drives the test skin in CI.
   `plugin/Source/RmlSkinComponent.*` draws a file skin with OpenGL (all RmlUi/Lua work on the GL thread);
   `PluginEditor.*` has the Built-in skin, the right-click menu, zoom and the fallback (rack, then Built-in).
-  Skin authoring guide: `docs/SKINS.md`. Skin and zoom are global settings, never project state or parameters;
-  per-element knob positions are project state (processor state version 2).
+  Skin authoring guide: `docs/SKINS.md`. The skin is a global setting; the window scale (50-200 % of the skin's base size,
+  aspect locked, resized by our own corner drag) is saved globally and per project; neither is a parameter.
+  Per-element knob positions and the window scale are project state (processor state version 3).
 - Real-time rules for `engine.*`: the audio thread never waits on other threads. `getState` asks the audio thread
   for a snapshot at a block boundary (`Machine::saveStateInto`, preallocated); panel controls go through a
   lock-free latest-value slot per cc, sent at most once per 10 ms each and only while the panel link keeps up;

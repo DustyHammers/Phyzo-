@@ -34,6 +34,10 @@ public:
 
     std::function<void(bool ok, const juce::String& error)> onLoaded;
     std::function<void(const juce::MouseEvent&)> onRightClick;
+    // Drags in the bottom-right corner resize the window (the OpenGL view would hide the editor's own resizer):
+    // phase 0 = start, 1 = drag (offset from the start, screen pixels), 2 = end.
+    std::function<void(int phase, juce::Point<int> offset)> onCornerResize;
+    static constexpr int kCornerSize = 24;
 
     void paint(juce::Graphics&) override;
     void resized() override;
@@ -69,6 +73,8 @@ private:
     int viewW_ = 0, viewH_ = 0;            // last viewport given to the view (GL thread)
     float viewDp_ = 0;
     bool debugger_ = false;
+    bool cornerDrag_ = false;
+    juce::Point<int> cornerStart_;
     juce::String message_, persistent_;
     juce::uint32 messageUntil_ = 0;
     juce::String glError_;

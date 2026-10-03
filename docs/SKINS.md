@@ -24,7 +24,9 @@ Phyzo adds.
 
 The document body is **1795 × 848 dp**. One dp is zoom × display scale physical pixels: at 100 % zoom on a Retina
 screen 1 dp = 2 px, so art drawn at twice the dp size (`resolution: 2x` in a `@spritesheet`) stays sharp. The
-window size is the body size × zoom (75, 100, 125, 150 or 200 %, chosen in the right-click menu).
+window size is the body size × zoom: 50-200 %, set by dragging the window's corner or from the right-click menu
+(75, 100, 125, 150, 200 %). The dp ratio follows the window continuously; RmlUi redraws the art at each size (no
+bitmap stretching of the window). The bottom-right corner (24 screen points) is the resize grip: keep controls out of it.
 
 ## Panel elements
 

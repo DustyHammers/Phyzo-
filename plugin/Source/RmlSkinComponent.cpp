@@ -155,6 +155,12 @@ void RmlSkinComponent::openGLContextClosing() {
 // ------------------------------------------------------------------ message thread: input
 
 void RmlSkinComponent::paint(juce::Graphics& g) {
+    // Resize grip (the editor's own corner resizer sits here but is hidden by the OpenGL view).
+    g.setColour(juce::Colours::white.withAlpha(0.35f));
+    for (int i = 1; i <= 3; ++i) {
+        const float d = float(i) * 4.0f;
+        g.drawLine(float(getWidth()) - d, float(getHeight()) - 2.0f, float(getWidth()) - 2.0f, float(getHeight()) - d, 1.0f);
+    }
     auto bounds = getLocalBounds();
     for (const juce::String* text : {&persistent_, &message_}) {
         if (text->isEmpty()) continue;
@@ -179,16 +185,27 @@ int RmlSkinComponent::mods(const juce::ModifierKeys& m) {
 }
 
 void RmlSkinComponent::mouseMove(const juce::MouseEvent& e) {
+    const bool corner = onCornerResize && e.x >= getWidth() - kCornerSize && e.y >= getHeight() - kCornerSize;
+    setMouseCursor(corner ? juce::MouseCursor::BottomRightCornerResizeCursor : juce::MouseCursor::NormalCursor);
     const int x = toPx(e.position.x), y = toPx(e.position.y), m = mods(e.mods);
     post([this, x, y, m] { view_->mouseMove(x, y, m); });
 }
 
-void RmlSkinComponent::mouseDrag(const juce::MouseEvent& e) { mouseMove(e); }
+void RmlSkinComponent::mouseDrag(const juce::MouseEvent& e) {
+    if (cornerDrag_) { if (onCornerResize) onCornerResize(1, e.getScreenPosition() - cornerStart_); return; }
+    mouseMove(e);
+}
 
 void RmlSkinComponent::mouseDown(const juce::MouseEvent& e) {
     const int bannerBottom = (persistent_.isNotEmpty() ? 64 : 0) + (message_.isNotEmpty() ? 64 : 0);
     if (message_.isNotEmpty() && e.position.y < bannerBottom && e.position.y >= bannerBottom - 64) { showMessage({}); return; }   // click hides it
     if (e.mods.isPopupMenu()) { if (onRightClick) onRightClick(e); return; }      // right-click never presses
+    if (onCornerResize && e.x >= getWidth() - kCornerSize && e.y >= getHeight() - kCornerSize) {
+        cornerDrag_ = true;
+        cornerStart_ = e.getScreenPosition();
+        onCornerResize(0, {});
+        return;
+    }
     grabKeyboardFocus();
     const int x = toPx(e.position.x), y = toPx(e.position.y), m = mods(e.mods);
     const int button = e.mods.isMiddleButtonDown() ? 2 : 0;
@@ -196,6 +213,7 @@ void RmlSkinComponent::mouseDown(const juce::MouseEvent& e) {
 }
 
 void RmlSkinComponent::mouseUp(const juce::MouseEvent& e) {
+    if (cornerDrag_) { cornerDrag_ = false; if (onCornerResize) onCornerResize(2, e.getScreenPosition() - cornerStart_); return; }
     if (e.mods.isPopupMenu()) return;
     const int m = mods(e.mods);
     const int button = e.mods.isMiddleButtonDown() ? 2 : 0;
