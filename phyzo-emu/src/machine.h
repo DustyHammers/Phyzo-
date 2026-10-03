@@ -45,6 +45,7 @@ public:
     // included (they come from the ROM files, which must be the same ones). load() needs init() and the wave memory
     // first; on failure the machine is left as it was before the call only if the data was rejected up front.
     std::vector<uint8_t> saveState();
+    void saveStateInto(std::vector<uint8_t>& out);
     bool loadState(const std::vector<uint8_t>& data, std::string& err);
 
     // Audio timing: voice-chip samples produced so far, and the CPU cycle at which sample n is produced.
@@ -124,6 +125,7 @@ private:
     friend struct CpuLock;
     void becomeCpuOwner();               // with the CPU lock held: load this machine's CPU state into Musashi
     std::vector<uint8_t> cpuState_;      // this machine's CPU while another machine owns Musashi
+    std::vector<uint8_t> cpuSnap_;       // CPU section buffer for saveStateInto
     uint32_t moduleRead8(uint32_t off, bool& ok);
     void moduleWrite8(uint32_t off, uint8_t v, bool& ok);
     void logUnmapped(uint32_t a, char rw, int size, uint32_t v);

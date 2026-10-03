@@ -55,6 +55,8 @@ public:
         std::atomic<float> avg{0}, peak{0}, last{0}, lastMs{0}, blockMs{0};
         std::atomic<int> blockSize{0};
         std::atomic<uint64_t> overruns{0};
+        std::atomic<float> worstMs{0};               // longest block since the last prepare (or reset)
+        std::atomic<uint64_t> stateRequests{0};      // host requests for the plugin state
         std::array<std::atomic<float>, 8> history{}; // one value per second, oldest first after `head`
         std::atomic<uint32_t> head{0};
     } meter;

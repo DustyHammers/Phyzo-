@@ -159,6 +159,11 @@ add_executable(resampler_test tests/resampler_test.cpp src/resampler.cpp)
 target_include_directories(resampler_test PRIVATE src)
 target_compile_options(resampler_test PRIVATE -Wall -Wextra)
 add_test(NAME resampler COMMAND resampler_test)
+# Real-time stress of the plugin engine (knob sweeps, buttons, state requests while audio runs); not a CI test.
+add_executable(phyzo_stress src/stress_main.cpp)
+target_link_libraries(phyzo_stress PRIVATE phyzo_core)
+target_compile_options(phyzo_stress PRIVATE -Wall -Wextra)
+
 add_executable(engine_test tests/engine_test.cpp)
 target_link_libraries(engine_test PRIVATE phyzo_core)
 target_compile_options(engine_test PRIVATE -Wall -Wextra)

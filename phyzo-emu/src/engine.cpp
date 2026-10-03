@@ -1,5 +1,7 @@
 #include "engine.h"
 #include <algorithm>
+#include <chrono>
+#include <thread>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -29,6 +31,7 @@ bool unpackBlob(const std::vector<uint8_t>& data, Blob& b) {
 }  // namespace
 
 Engine::Engine() {
+    snap_.reserve(size_t(4) << 20);                 // machine state is about 0.8 MB: snapshots never allocate
     for (int i = 0; i < 26; ++i) { controls_[size_t(i)] = PanelModel::kFreshControls[size_t(i)]; positions_[size_t(i)] = controls_[size_t(i)]; }
 }
 
@@ -55,10 +58,25 @@ void Engine::setRoms(const std::string& osPath, const std::string& wavePath, con
 }
 
 std::vector<uint8_t> Engine::getState() {
-    {
-        std::lock_guard<std::mutex> lk(mtx_);
-        if (live_ && state_.load() == State::Running) return packBlob({osMd5_, waveMd5_, live_->saveState()});
+    std::lock_guard<std::mutex> gl(getStateMtx_);
+    if (state_.load() != State::Running) return pendingState_;
+    auto nowMs = [] { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
+    // Audio running: ask the audio thread for a snapshot at its next block boundary.
+    if (nowMs() - lastProcessMs_.load() < 200) {
+        const uint32_t want = snapRequest_.load() + 1;
+        snapRequest_ = want;
+        for (int i = 0; i < 500 && snapDone_.load(std::memory_order_acquire) != want; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (snapDone_.load(std::memory_order_acquire) == want) {
+            // The audio thread leaves snap_ alone until the next request (only made here, under getStateMtx_).
+            std::vector<uint8_t> blob = packBlob({osMd5_, waveMd5_, snap_});
+            if (snap_.size() * 2 > snap_.capacity()) snap_.reserve(snap_.size() * 2);   // keep the audio side allocation-free
+            return blob;
+        }
     }
+    // Audio not running (stopped host, offline): save directly.
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (live_ && state_.load() == State::Running) return packBlob({osMd5_, waveMd5_, live_->saveState()});
     return pendingState_;
 }
 
@@ -134,7 +152,33 @@ void Engine::setControl(int cc, int raw) {
     raw = std::clamp(raw, 0, 1023);
     { std::lock_guard<std::mutex> lk(controlsMtx_); controls_[size_t(cc)] = uint16_t(raw); }
     positions_[size_t(cc)] = uint16_t(raw);
-    push((1u << 24) | (uint32_t(cc) << 10) | uint32_t(raw));
+    pendingControl_[size_t(cc)].store(uint16_t(0x8000 | raw), std::memory_order_release);   // latest value wins
+}
+
+// Audio thread, block start: one message per control that moved, at most one per kControlIntervalMs each, and
+// only while the panel link keeps up (the serial port itself delivers bytes at the link's real rate).
+void Engine::sendControls(Machine& m) {
+    const uint64_t now = m.cycles();
+    const uint64_t interval = m.cyclesFromMs(kControlIntervalMs);
+    for (size_t cc = 0; cc < pendingControl_.size(); ++cc) {
+        if (!(pendingControl_[cc].load(std::memory_order_relaxed) & 0x8000)) continue;
+        if (controlSentAt_[cc] && now - controlSentAt_[cc] < interval) continue;
+        if (m.serial.rxBacklog(0) > kPanelBacklogBytes) return;
+        const uint16_t v = pendingControl_[cc].exchange(0, std::memory_order_acq_rel);
+        if (!(v & 0x8000)) continue;
+        m.panel.moveControl(int(cc), int(v & 0x3FF), now);
+        positions_[cc] = m.panel.controls[cc];
+        controlSentAt_[cc] = now ? now : 1;
+        ++controlMessages_;
+    }
+}
+
+// Audio thread, block end: serve a pending getState request.
+void Engine::serveSnapshot(Machine& m) {
+    const uint32_t want = snapRequest_.load(std::memory_order_acquire);
+    if (want == snapDone_.load(std::memory_order_relaxed)) return;
+    m.saveStateInto(snap_);
+    snapDone_.store(want, std::memory_order_release);
 }
 
 void Engine::publishPositions(const Machine& m) {
@@ -235,6 +279,7 @@ void Engine::install(std::unique_ptr<Machine> m, uint64_t generation, uint8_t ra
         rawPlus_ = rawPlus; rawMinus_ = rawMinus;
         publishPositions(*live_);
         publishLeds(*live_);
+        controlSentAt_.fill(0);
         { std::lock_guard<std::mutex> lc(controlsMtx_); controls_ = live_->panel.controls; }   // a restored state's knobs
         retime_ = true;
         state_ = State::Running;
@@ -256,6 +301,7 @@ void Engine::publishDisplay(Machine& m) {
 
 void Engine::prepare(double hostRate, int maxBlock) {
     std::lock_guard<std::mutex> lk(mtx_);
+    maxLockWaitUs_ = 0;
     hostRate_ = hostRate;
     resampler_.setup(44100, int(std::lround(hostRate)));
     retime_ = true;
@@ -270,12 +316,7 @@ void Engine::drainButtons(Machine& m) {
     const uint32_t head = btnHead_.load(std::memory_order_acquire);
     for (; tail != head; ++tail) {
         const uint32_t v = buttons_[tail % kButtonRing].load(std::memory_order_relaxed);
-        if ((v >> 24) == 1) {
-            const int cc = int((v >> 10) & 0x1F);
-            m.panel.moveControl(cc, int(v & 0x3FF), m.cycles());
-            if (cc < 26) positions_[size_t(cc)] = m.panel.controls[size_t(cc)];
-            continue;
-        }
+        ++buttonMessages_;
         if ((v >> 24) == 2) {
             m.panel.inject({uint8_t((v & 0x100) ? 0x81 : 0x80), uint8_t(v & 0x7F)}, m.cycles(), std::string());
             continue;
@@ -287,7 +328,12 @@ void Engine::drainButtons(Machine& m) {
 }
 
 void Engine::process(float* left, float* right, int n, const MidiEvent* events, int numEvents) {
-    std::lock_guard<std::mutex> lk(mtx_);
+    const auto t0 = std::chrono::steady_clock::now();
+    std::unique_lock<std::mutex> lk(mtx_);
+    const auto t1 = std::chrono::steady_clock::now();
+    lastProcessMs_ = std::chrono::duration_cast<std::chrono::milliseconds>(t1.time_since_epoch()).count();
+    const double waitUs = std::chrono::duration<double, std::micro>(t1 - t0).count();
+    if (waitUs > maxLockWaitUs_.load(std::memory_order_relaxed)) maxLockWaitUs_ = waitUs;
     if (!live_ || state_.load() != State::Running || hostRate_ <= 0) {
         std::fill(left, left + n, 0.0f); std::fill(right, right + n, 0.0f);
         return;
@@ -301,6 +347,7 @@ void Engine::process(float* left, float* right, int n, const MidiEvent* events, 
         retime_ = false;
     }
     drainButtons(m);
+    sendControls(m);
 
     // MIDI: each event goes to the MIDI port at its exact time plus the constant latency.
     const double r = 44100.0 / hostRate_, cyclesPerSample = m.config().cpuHz / 44100.0;
@@ -343,6 +390,7 @@ void Engine::process(float* left, float* right, int n, const MidiEvent* events, 
     resampler_.produce(left, right, n);
     hostPos_ += n;
     publishDisplay(m);
+    serveSnapshot(m);
 }
 
 // ------------------------------------------------------------------ tests

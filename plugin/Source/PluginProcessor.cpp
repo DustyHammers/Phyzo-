@@ -36,6 +36,7 @@ void PhyzoProcessor::timerCallback() {
 
 void PhyzoProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
     hostRate_ = sampleRate;
+    meter.worstMs = 0; meter.overruns = 0;
     engine_.prepare(sampleRate, samplesPerBlock);
     setLatencySamples(engine_.latencySamples());
 }
@@ -61,6 +62,7 @@ void PhyzoProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBu
     const double load = budget > 0 ? used / budget : 0;
     meter.last = float(load); meter.lastMs = float(used * 1000); meter.blockMs = float(budget * 1000); meter.blockSize = n;
     if (load > 1.0) ++meter.overruns;
+    if (float(used * 1000) > meter.worstMs.load()) meter.worstMs = float(used * 1000);
     winTime_ += used; winBudget_ += budget; winPeak_ = std::max(winPeak_, load);
     if (winBudget_ >= 1.0) {
         const float avg = float(winTime_ / winBudget_);
@@ -77,6 +79,7 @@ juce::AudioProcessorEditor* PhyzoProcessor::createEditor() { return new PhyzoEdi
 // State: magic, version, UI flags, the engine state (complete machine, gzip-compressed), then the skin's knob
 // element positions (count, then id and raw for each).
 void PhyzoProcessor::getStateInformation(juce::MemoryBlock& dest) {
+    ++meter.stateRequests;
     const std::vector<uint8_t> engineState = engine_.getState();
     juce::MemoryOutputStream out(dest, false);
     out.writeInt(int(kStateMagic));

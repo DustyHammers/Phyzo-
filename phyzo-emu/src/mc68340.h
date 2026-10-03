@@ -79,6 +79,7 @@ public:
     void save(StateWriter& w) const;
     void load(StateReader& r);
     bool rxIdle(int ch) const { return ch_[ch].pending.empty() && ch_[ch].fifo.empty(); }
+    size_t rxBacklog(int ch) const { return ch_[ch].pending.size() + ch_[ch].fifo.size(); }   // bytes not yet read
 
     SerialChannel ch_[2];
     uint8_t ier = 0, ilr = 0, ivr = 0x0f, acr = 0, opcr = 0, op = 0;
